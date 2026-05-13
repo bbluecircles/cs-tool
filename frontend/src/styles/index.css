@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ----------------------------------------------------------------------------
+ * Base tweaks
+ * ------------------------------------------------------------------------- */
+@layer base {
+  html {
+    font-family: theme('fontFamily.sans');
+  }
+  body {
+    @apply text-base text-gray-900 bg-white;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+  /* Subtle focus ring everywhere by default */
+  :focus-visible {
+    @apply outline-none ring-2 ring-focus-ring ring-offset-1;
+  }
+  /* Firefox: hide the default spinner on number inputs */
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+}
+
+/* ----------------------------------------------------------------------------
+ * Reusable component classes
+ * Keep these narrow; prefer composing Tailwind utilities in components.
+ * ------------------------------------------------------------------------- */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md
+           px-3.5 py-2 text-sm font-medium
+           transition-colors disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-primary {
+    @apply btn bg-secondary-500 text-white hover:bg-secondary-700
+           active:bg-secondary-900;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-secondary-500 border border-border
+           hover:bg-secondary-100;
+  }
+  .btn-ghost {
+    @apply btn text-gray-700 hover:bg-gray-100;
+  }
+
+  .input {
+    @apply block w-full rounded-md border border-border bg-white
+           px-3 py-2 text-sm text-gray-900 placeholder:text-gray-500
+           focus:border-secondary-500 focus:ring-1 focus:ring-secondary-500;
+  }
+  .input-error {
+    @apply border-error-600 focus:border-error-600 focus:ring-error-600;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-gray-700 mb-1;
+  }
+
+  .card {
+    @apply rounded-lg border border-border bg-white shadow-card;
+  }
+
+  div[role="dialog"] {
+    margin: 0 !important;
+  }
+}

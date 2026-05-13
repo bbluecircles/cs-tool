@@ -1,0 +1,349 @@
+/**
+ * Per-column filter input rendered under the table header.
+ *
+ * Each column's filter kind dictates which control renders:
+ *   text          → debounced text input → emits one `like` filter
+ *   int           → number input → emits one `eq` filter
+ *   flag          → tri-state All/Yes/No select → emits 0 or 1 `eq` filter
+ *   enum          → select with column.options → emits 0 or 1 `eq` filter
+ *   date          → two date pickers (from + to) → emits 0–2 filters
+ *   customer_code → CustomerPicker → emits 0 or 1 `eq` filter
+ *
+ * The component reports its current filters via onChange as a list, NOT
+ * a single filter — date ranges produce two clauses (gte + lte) on the
+ * same column, and the parent's filter state is a flat list.
+ *
+ * State is fully derived from the `value` prop. The parent owns the
+ * canonical filter list; this component is presentational and tells the
+ * parent when to update.
+ */
+import { useEffect, useMemo, useState } from 'react'
+import type { ColumnDef, FilterKind } from './resourceConfigs'
+import { effectiveFilterKind } from './resourceConfigs'
+import type { ResourceFilter } from '@/api/resources'
+import { CustomerPicker } from './CustomerPicker'
+
+interface ColumnFilterInputProps {
+  column: ColumnDef
+  /** The filters currently applied to this column. Usually 0 or 1
+   *  entries; date columns may have up to 2 (one gte, one lte). */
+  value: ResourceFilter[]
+  /** Replace this column's filter clauses with the given list. The
+   *  parent diffs this against its overall filter state and re-renders
+   *  the table. */
+  onChange: (next: ResourceFilter[]) => void
+}
+
+export function ColumnFilterInput({
+  column,
+  value,
+  onChange,
+}: ColumnFilterInputProps) {
+  const kind = effectiveFilterKind(column)
+  if (kind === null) {
+    // Non-filterable columns get an empty cell — header still aligned.
+    return <div className="h-7" />
+  }
+
+  switch (kind) {
+    case 'text':
+      return <TextFilter column={column} value={value} onChange={onChange} />
+    case 'int':
+      return <IntFilter column={column} value={value} onChange={onChange} />
+    case 'flag':
+      return <FlagFilter column={column} value={value} onChange={onChange} />
+    case 'enum':
+      return <EnumFilter column={column} value={value} onChange={onChange} />
+    case 'date':
+      return <DateRangeFilter column={column} value={value} onChange={onChange} />
+    case 'customer_code':
+      return <CustomerCodeFilter column={column} value={value} onChange={onChange} />
+  }
+  // Exhaustive check.
+  return assertNever(kind)
+}
+
+function assertNever(_x: never): never {
+  throw new Error('unreachable')
+}
+
+// ---------------------------------------------------------------------------
+// Text — debounced LIKE
+// ---------------------------------------------------------------------------
+
+function TextFilter({
+  column,
+  value,
+  onChange,
+}: {
+  column: ColumnDef
+  value: ResourceFilter[]
+  onChange: (next: ResourceFilter[]) => void
+}) {
+  const initial = useMemo(() => {
+    const f = value.find((v) => v.operator === 'like')
+    if (!f) return ''
+    // Strip the surrounding %s if the parent is showing us its own state
+    // (it shouldn't, but defensive).
+    const s = String(f.value)
+    return s.startsWith('%') && s.endsWith('%') ? s.slice(1, -1) : s
+  }, [value])
+
+  const [draft, setDraft] = useState(initial)
+
+  // Sync down: if the parent clears filters externally, reflect that.
+  useEffect(() => {
+    setDraft(initial)
+  }, [initial])
+
+  // Sync up: 300ms debounce to avoid hammering the API on every keystroke.
+  useEffect(() => {
+    if (draft === initial) return
+    const t = setTimeout(() => {
+      if (draft === '') {
+        onChange([])
+      } else {
+        onChange([{ column: column.key, operator: 'like', value: draft }])
+      }
+    }, 300)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft])
+
+  return (
+    <input
+      type="search"
+      className="input py-0.5 px-1 text-xs w-full"
+      placeholder="contains…"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Int — exact match
+// ---------------------------------------------------------------------------
+
+function IntFilter({
+  column,
+  value,
+  onChange,
+}: {
+  column: ColumnDef
+  value: ResourceFilter[]
+  onChange: (next: ResourceFilter[]) => void
+}) {
+  const initial = useMemo(() => {
+    const f = value.find((v) => v.operator === 'eq')
+    return f ? String(f.value) : ''
+  }, [value])
+
+  const [draft, setDraft] = useState(initial)
+
+  useEffect(() => {
+    setDraft(initial)
+  }, [initial])
+
+  useEffect(() => {
+    if (draft === initial) return
+    const t = setTimeout(() => {
+      if (draft === '') {
+        onChange([])
+      } else {
+        const n = Number(draft)
+        if (Number.isFinite(n)) {
+          onChange([{ column: column.key, operator: 'eq', value: n }])
+        }
+      }
+    }, 300)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft])
+
+  return (
+    <input
+      type="number"
+      className="input py-0.5 px-1 text-xs w-full"
+      placeholder="="
+      value={draft}
+      min={column.min}
+      max={column.max}
+      onChange={(e) => setDraft(e.target.value)}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Flag — tri-state select
+// ---------------------------------------------------------------------------
+
+function FlagFilter({
+  column,
+  value,
+  onChange,
+}: {
+  column: ColumnDef
+  value: ResourceFilter[]
+  onChange: (next: ResourceFilter[]) => void
+}) {
+  const current = useMemo(() => {
+    const f = value.find((v) => v.operator === 'eq')
+    return f ? String(f.value) : ''
+  }, [value])
+
+  return (
+    <select
+      className="input py-0.5 px-1 text-xs w-full"
+      value={current}
+      onChange={(e) => {
+        const v = e.target.value
+        if (v === '') onChange([])
+        else onChange([{ column: column.key, operator: 'eq', value: Number(v) }])
+      }}
+    >
+      <option value="">All</option>
+      <option value="0">No</option>
+      <option value="1">Yes</option>
+    </select>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Enum — select from column.options
+// ---------------------------------------------------------------------------
+
+function EnumFilter({
+  column,
+  value,
+  onChange,
+}: {
+  column: ColumnDef
+  value: ResourceFilter[]
+  onChange: (next: ResourceFilter[]) => void
+}) {
+  const current = useMemo(() => {
+    const f = value.find((v) => v.operator === 'eq')
+    return f ? String(f.value) : ''
+  }, [value])
+
+  return (
+    <select
+      className="input py-0.5 px-1 text-xs w-full"
+      value={current}
+      onChange={(e) => {
+        const v = e.target.value
+        if (v === '') {
+          onChange([])
+          return
+        }
+        // Convert to number if column.kind is int/flag, else keep string.
+        const out: ResourceFilter[] =
+          column.kind === 'flag' || column.kind === 'int'
+            ? [{ column: column.key, operator: 'eq', value: Number(v) }]
+            : [{ column: column.key, operator: 'eq', value: v }]
+        onChange(out)
+      }}
+    >
+      <option value="">All</option>
+      {(column.options ?? []).map((o) => (
+        <option key={String(o.value)} value={String(o.value)}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Date range — two pickers, emits up to two filters
+// ---------------------------------------------------------------------------
+
+function DateRangeFilter({
+  column,
+  value,
+  onChange,
+}: {
+  column: ColumnDef
+  value: ResourceFilter[]
+  onChange: (next: ResourceFilter[]) => void
+}) {
+  const fromValue = useMemo(() => {
+    const f = value.find((v) => v.operator === 'gte')
+    return f ? String(f.value) : ''
+  }, [value])
+  const toValue = useMemo(() => {
+    const f = value.find((v) => v.operator === 'lte')
+    return f ? String(f.value) : ''
+  }, [value])
+
+  function emit(from: string, to: string) {
+    const next: ResourceFilter[] = []
+    if (from) next.push({ column: column.key, operator: 'gte', value: from })
+    // Add a day's worth of slack on the upper bound so "to=2026-05-06"
+    // matches everything created during that day, not only the moment
+    // 00:00:00. Cheaper than parsing dates client-side; backend treats
+    // the string as a datetime literal.
+    if (to) {
+      next.push({
+        column: column.key,
+        operator: 'lte',
+        value: `${to} 23:59:59`,
+      })
+    }
+    onChange(next)
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="date"
+        className="input py-0.5 px-1 text-xs w-full"
+        value={fromValue}
+        onChange={(e) => emit(e.target.value, toValue.slice(0, 10))}
+        title="From"
+      />
+      <span className="text-[10px] text-gray-400">–</span>
+      <input
+        type="date"
+        className="input py-0.5 px-1 text-xs w-full"
+        // The displayed `to` value is the date portion of the stored
+        // "YYYY-MM-DD 23:59:59" string.
+        value={toValue.slice(0, 10)}
+        onChange={(e) => emit(fromValue, e.target.value)}
+        title="To"
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Customer-code — picker dropdown
+// ---------------------------------------------------------------------------
+
+function CustomerCodeFilter({
+  column,
+  value,
+  onChange,
+}: {
+  column: ColumnDef
+  value: ResourceFilter[]
+  onChange: (next: ResourceFilter[]) => void
+}) {
+  const current = useMemo(() => {
+    const f = value.find((v) => v.operator === 'eq')
+    return f && typeof f.value === 'number' ? f.value : null
+  }, [value])
+
+  return (
+    <CustomerPicker
+      value={current}
+      allowAll
+      className="input py-0.5 px-1 text-xs w-full"
+      onChange={(v) => {
+        if (v === null) onChange([])
+        else onChange([{ column: column.key, operator: 'eq', value: v }])
+      }}
+    />
+  )
+}
