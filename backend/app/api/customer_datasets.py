@@ -7,7 +7,10 @@
   PATCH  /api/customer-datasets/{rec_id}     update
   DELETE /api/customer-datasets/{rec_id}     hard delete
 
-This is the ONLY resource with DELETE.
+Delete is allowed here and on ppi-datasets. The customer-datasets delete
+ships with an impact-preview endpoint because removing a dataset row drops
+its users' rows from the user_details views; PPI rows have no equivalent
+per-user fanout and so don't need a preview.
 """
 
 from __future__ import annotations

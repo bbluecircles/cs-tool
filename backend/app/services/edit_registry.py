@@ -165,7 +165,10 @@ _REGISTRY_LIST: tuple[EditableColumn, ...] = (
 
     # ----- customer (customer-scoped) -----
     _varchar("customer_name", "customer", _C, 80, nullable=True),
-    _varchar("entity_code",   "customer", _C, 15, nullable=True),
+    # entity_code is INTEGER-typed even though the DB column is varchar.
+    # See the comment on NewCustomerInput.entity_code in create_user.py:
+    # empty / non-integer values break tsp_entity_users in the main app.
+    _small_int("entity_code", "customer", _C, min_value=1, max_value=32767),
     EditableColumn(
         name="max_bytes", scope="customer", target_table=_C, column="max_bytes",
         kind="bigint", min_value=0, max_value=10_000_000_000_000, nullable=True,

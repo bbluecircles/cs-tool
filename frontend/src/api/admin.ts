@@ -10,6 +10,14 @@ export interface RetryResponse {
   statement_count?: number
   /** True when the endpoint declined to run because a config flag is off. */
   disabled?: boolean
+  /**
+   * Only populated by retry-grants: describes the refresh phase that
+   * runs before grants. 'skipped_disabled' means refresh is owned by an
+   * external process; 'succeeded' means the views were just rebuilt;
+   * 'failed' means the refresh raised and grants did NOT run.
+   */
+  refresh_status?: 'skipped_disabled' | 'succeeded' | 'failed' | null
+  refresh_error?: string | null
 }
 
 export function retryRefresh(): Promise<RetryResponse> {

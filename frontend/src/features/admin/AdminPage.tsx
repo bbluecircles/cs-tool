@@ -56,10 +56,10 @@ function SyncCard() {
             </div>
           </div>
           <div className="mt-1 text-[11px] text-gray-500">
-            Re-executes CREATE USER / ALTER USER / GRANT statements for every
-            active user of the chosen customer. Run this after creating a
-            user, changing a password, or editing the database_name of a
-            dataset.
+            Refreshes the user_details views and then re-executes CREATE
+            USER / ALTER USER / GRANT statements for every active user of
+            the chosen customer. Run this after creating a user, changing
+            a password, or editing the database_name of a dataset.
           </div>
           <div className="mt-3 space-y-2">
             <CustomerPicker
@@ -132,6 +132,16 @@ function SyncCard() {
                 ? 'succeeded'
                 : 'failed'}
           </div>
+          {lastResult.result.refresh_status && (
+            <div className="text-[11px] text-gray-900">
+              Refresh:{' '}
+              {lastResult.result.refresh_status === 'succeeded'
+                ? 'rebuilt user_details views'
+                : lastResult.result.refresh_status === 'skipped_disabled'
+                  ? 'skipped (owned by external process)'
+                  : `failed — ${lastResult.result.refresh_error ?? 'unknown error'}`}
+            </div>
+          )}
           {lastResult.result.statement_count !== undefined && (
             <div className="text-[11px] text-gray-900">
               {lastResult.result.statement_count} statements applied.

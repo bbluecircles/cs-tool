@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -46,6 +46,10 @@ class RetryResponse(BaseModel):
     statement_count: int | None = None
     # True if the endpoint declined to run because of config.
     disabled: bool = False
+    # When the grants endpoint also runs a refresh first, these record
+    # what happened. Unused by retry-refresh (which IS the refresh).
+    refresh_status: Literal["skipped_disabled", "succeeded", "failed"] | None = None
+    refresh_error: str | None = None
 
 
 @router.post("/retry-refresh", response_model=RetryResponse)
@@ -97,16 +101,70 @@ def retry_grants(
     request: Request,
     agent: Annotated[CurrentAgent, Depends(require_admin)],
 ) -> RetryResponse:
+    """Run grants for a customer, refreshing the user_details views first.
+
+    The grants generators read from secure.user_details_internal_2026 and
+    myuser.user_details_2026 — both denormalized views populated by the
+    refresh. Without a fresh refresh, a customer/user/dataset created
+    moments ago is invisible to the grants step and the endpoint returns
+    "0 statements applied" with no error, which is a foot-gun.
+
+    To avoid that, we refresh first. If refresh is disabled by config
+    (an external process owns it), we skip the refresh and run grants
+    against whatever state that process has produced. If refresh fails,
+    we don't run grants — running them against stale data would just
+    repeat the silent-failure problem.
+    """
     if customer_code < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="customer_code must be non-negative",
         )
+
+    settings = get_settings()
+    refresh_status: Literal["skipped_disabled", "succeeded", "failed"]
+    refresh_error: str | None = None
+
+    # Phase 1: refresh (if enabled).
+    if not settings.enable_view_refresh:
+        refresh_status = "skipped_disabled"
+    else:
+        try:
+            with get_raw_connection() as conn:
+                refresh_all(conn)
+            refresh_status = "succeeded"
+        except RefreshDisabled as e:
+            # Belt-and-suspenders: the flag check above should have caught
+            # this, but sync_sql.refresh_all guards independently.
+            refresh_status = "skipped_disabled"
+            refresh_error = str(e)
+        except Exception as e:
+            log.exception("retry-grants: refresh phase failed")
+            refresh_status = "failed"
+            refresh_error = str(e)
+            with get_connection() as conn:
+                audit.record(
+                    conn,
+                    user_id=agent.user_id,
+                    action="admin.retry_grants.failed",
+                    entity_type="sync",
+                    entity_key=str(customer_code),
+                    notes=f"refresh phase failed: {e}",
+                    ip=_client_ip(request),
+                )
+            return RetryResponse(
+                ok=False,
+                error=f"Refresh failed before grants ran: {e}",
+                refresh_status=refresh_status,
+                refresh_error=refresh_error,
+            )
+
+    # Phase 2: grants.
     try:
         with get_raw_connection() as conn:
             count = grants_for_customer(conn, customer_code)
     except Exception as e:
-        log.exception("retry-grants failed")
+        log.exception("retry-grants: grants phase failed")
         with get_connection() as conn:
             audit.record(
                 conn,
@@ -114,10 +172,15 @@ def retry_grants(
                 action="admin.retry_grants.failed",
                 entity_type="sync",
                 entity_key=str(customer_code),
-                notes=str(e),
+                notes=f"refresh={refresh_status}; grants phase failed: {e}",
                 ip=_client_ip(request),
             )
-        return RetryResponse(ok=False, error=str(e))
+        return RetryResponse(
+            ok=False,
+            error=str(e),
+            refresh_status=refresh_status,
+            refresh_error=refresh_error,
+        )
 
     with get_connection() as conn:
         audit.record(
@@ -126,10 +189,15 @@ def retry_grants(
             action="admin.retry_grants",
             entity_type="sync",
             entity_key=str(customer_code),
-            notes=f"{count} statements applied",
+            notes=f"refresh={refresh_status}; {count} statements applied",
             ip=_client_ip(request),
         )
-    return RetryResponse(ok=True, statement_count=count)
+    return RetryResponse(
+        ok=True,
+        statement_count=count,
+        refresh_status=refresh_status,
+        refresh_error=refresh_error,
+    )
 
 
 class AuditEntry(BaseModel):

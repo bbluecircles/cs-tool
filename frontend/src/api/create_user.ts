@@ -17,7 +17,12 @@ export interface ExistingCustomerRef {
 export interface NewCustomerInput {
   mode: 'new'
   customer_name: string
-  entity_code?: string | null
+  /**
+   * Optional integer (1..32767). When omitted, the backend defaults
+   * this to the auto-assigned customer_code (matches the convention
+   * in existing data). See create_user.py for full rationale.
+   */
+  entity_code?: number
   max_bytes?: number | null
   '5_digit_zip'?: 0 | 1
   max_row_cnt?: number | null

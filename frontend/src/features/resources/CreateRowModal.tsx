@@ -11,6 +11,7 @@ import { ApiError } from '@/api/client'
 import { createResource } from '@/api/resources'
 import type { ColumnDef, ResourceConfig } from './resourceConfigs'
 import { CustomerPicker } from './CustomerPicker'
+import { DatabasePicker } from './DatabasePicker'
 import { ModalShell } from './ModalShell'
 
 interface CreateRowModalProps {
@@ -187,6 +188,17 @@ function FieldInput({
     return (
       <CustomerPicker
         value={typeof value === 'number' ? value : null}
+        onChange={(v) => onChange(v)}
+        required={column.requiredOnCreate}
+        className={cls}
+      />
+    )
+  }
+
+  if (column.kind === 'database_picker') {
+    return (
+      <DatabasePicker
+        value={typeof value === 'string' && value !== '' ? value : null}
         onChange={(v) => onChange(v)}
         required={column.requiredOnCreate}
         className={cls}

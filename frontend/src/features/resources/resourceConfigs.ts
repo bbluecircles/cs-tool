@@ -38,6 +38,7 @@ export type ColumnKind =
   | 'readonly'   // never editable inline (IDs)
   | 'datetime'   // ISO string, read-only formatted
   | 'customer_code'  // int with a dropdown picker (customers list)
+  | 'database_picker' // string with a dropdown picker (myuser.db_database list)
 
 /**
  * Drives which input renders in the per-column filter row beneath the
@@ -103,8 +104,20 @@ export interface ResourceConfig {
   sortableColumns: Set<string>
   /** Whether the toolbar shows a customer_code filter dropdown. */
   filterByCustomerCode: boolean
-  /** True only for customer_dataset. */
+  /**
+   * Whether delete is allowed. True for customer-datasets and ppi-datasets.
+   */
   allowDelete: boolean
+  /**
+   * Drives the delete-confirm modal's impact section.
+   *  - 'customer_dataset' : fetches /delete-impact and shows the active-
+   *                         user count for the customer (the existing
+   *                         behavior).
+   *  - 'none' (default)   : skips the impact fetch and shows a plain
+   *                         confirm. Used for resources whose rows have
+   *                         no per-row downstream fanout (e.g. PPI).
+   */
+  deleteImpactKind?: 'customer_dataset' | 'none'
 }
 
 /**
@@ -120,6 +133,7 @@ export function effectiveFilterKind(col: ColumnDef): FilterKind | null {
     case 'flag':         return 'flag'
     case 'datetime':     return 'date'
     case 'customer_code': return 'customer_code'
+    case 'database_picker': return 'text'  // substring filter on database_name
     case 'readonly':     return null
   }
 }
@@ -194,8 +208,15 @@ export const customersConfig: ResourceConfig = {
       maxLength: 80, showInCreate: true, requiredOnCreate: true,
     },
     {
-      key: 'entity_code', label: 'Entity', kind: 'text', editable: true,
-      maxLength: 15, showInCreate: true,
+      // Integer-typed (even though the DB column is varchar). Optional
+      // on create — when omitted the backend defaults entity_code to
+      // the new customer_code, which matches the convention in existing
+      // data. Inline-edit (in the table) still requires a valid int via
+      // edit_registry; empty values break the main app's
+      // tsp_entity_users stored proc.
+      key: 'entity_code', label: 'Entity', kind: 'int', editable: true,
+      min: 1, max: 32767,
+      showInCreate: true,
     },
     {
       key: 'max_bytes', label: 'Max Bytes', kind: 'int', editable: true,
@@ -327,6 +348,7 @@ export const customerDatasetsConfig: ResourceConfig = {
   ]),
   filterByCustomerCode: true,
   allowDelete: true,
+  deleteImpactKind: 'customer_dataset',
   columns: [
     readonly('rec_id', 'Rec ID'),
     {
@@ -334,8 +356,10 @@ export const customerDatasetsConfig: ResourceConfig = {
       editable: false, showInCreate: true, requiredOnCreate: true,
     },
     {
-      key: 'database_name', label: 'Database', kind: 'text', editable: true,
-      maxLength: 25, showInCreate: true, requiredOnCreate: true,
+      // Driven by myuser.db_database via /api/db-databases (DatabasePicker).
+      key: 'database_name', label: 'Database', kind: 'database_picker',
+      editable: true, maxLength: 25,
+      showInCreate: true, requiredOnCreate: true,
     },
     {
       key: 'dataset_type', label: 'Type', kind: 'text', editable: true,
@@ -369,7 +393,7 @@ export const ppiDatasetsConfig: ResourceConfig = {
   slug: 'ppi-datasets',
   label: 'PPI Datasets',
   shortLabel: 'PPI',
-  description: 'PPI state-level datasets. No deletes.',
+  description: 'PPI state-level datasets. Deletes allowed.',
   buildId: (r) => String(r.rec_id),
   rowKey: (r) => `p-${r.rec_id}`,
   primaryKeyColumns: ['rec_id'],
@@ -379,7 +403,10 @@ export const ppiDatasetsConfig: ResourceConfig = {
     'create_date', 'modify_date',
   ]),
   filterByCustomerCode: true,
-  allowDelete: false,
+  allowDelete: true,
+  // PPI rows aren't joined to individual users, so there's no
+  // delete-impact preview to fetch.
+  deleteImpactKind: 'none',
   columns: [
     readonly('rec_id', 'Rec ID'),
     {

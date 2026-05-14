@@ -82,7 +82,7 @@ def create_customer(
         customer_code = customer_repo.create_customer(conn, payload)
         audit.record(
             conn,
-            agent_username=agent.user_id,
+            user_id=agent.user_id,
             action="customer.create",
             entity_type="secure.customer",
             entity_key=str(customer_code),
@@ -158,7 +158,7 @@ def update_customer(
         after = customer_repo.get_customer(conn, customer_code)
         audit.record(
             conn,
-            agent_username=agent.user_id,
+            user_id=agent.user_id,
             action="customer.update",
             entity_type="secure.customer",
             entity_key=str(customer_code),

@@ -4,8 +4,11 @@
   POST   /api/ppi-datasets              create
   GET    /api/ppi-datasets/{rec_id}     fetch one
   PATCH  /api/ppi-datasets/{rec_id}     update
+  DELETE /api/ppi-datasets/{rec_id}     hard delete
 
-No DELETE.
+PPI rows aren't joined to individual users, so unlike customer-datasets
+there's no delete-impact endpoint — the confirm dialog just asks for
+confirmation outright.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from app.db.session import get_connection
 from app.schemas.auth import CurrentAgent
 from app.schemas.resources import (
     CreateResponse,
+    DeleteResponse,
     EditPayload,
     ListResponse,
     UpdateResponse,
@@ -130,3 +134,30 @@ def update_ppi_dataset(
             ip=_client_ip(request),
         )
     return UpdateResponse(updated=after or {"rec_id": rec_id})
+
+
+@router.delete("/{rec_id}", response_model=DeleteResponse)
+def delete_ppi_dataset(
+    rec_id: int,
+    request: Request,
+    agent: Annotated[CurrentAgent, Depends(get_current_agent)],
+) -> DeleteResponse:
+    with get_connection() as conn:
+        before = ppi_dataset_repo.get_ppi_dataset(conn, rec_id)
+        if before is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="PPI dataset not found"
+            )
+        deleted = ppi_dataset_repo.delete_ppi_dataset(conn, rec_id)
+        audit.record(
+            conn,
+            user_id=agent.user_id,
+            action="ppi_dataset.delete",
+            entity_type="secure.ppi_dataset",
+            entity_key=str(rec_id),
+            before=before,
+            notes=f"hard delete of customer_code={before['customer_code']} "
+                  f"ppi_state={before['ppi_state']}",
+            ip=_client_ip(request),
+        )
+    return DeleteResponse(deleted=deleted > 0, rec_id=rec_id)

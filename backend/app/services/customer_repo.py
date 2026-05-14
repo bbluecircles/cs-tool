@@ -123,6 +123,15 @@ def create_customer(conn: Connection, data: dict[str, Any]) -> int:
         text("SELECT COALESCE(MAX(customer_code), 0) + 1 FROM secure.customer")
     ).scalar_one())
 
+    # entity_code defaults to customer_code when the caller doesn't
+    # specify one. This matches the convention in the existing data:
+    # most customers are their own entity, and cross-customer sharing is
+    # the exception (handled by explicitly setting entity_code to an
+    # existing bucket).
+    entity_code = data.get("entity_code")
+    if entity_code is None:
+        entity_code = customer_code
+
     conn.execute(
         text(
             """
@@ -137,7 +146,7 @@ def create_customer(conn: Connection, data: dict[str, Any]) -> int:
         {
             "customer_code": customer_code,
             "customer_name": data.get("customer_name"),
-            "entity_code": data.get("entity_code"),
+            "entity_code": entity_code,
             "max_bytes": data.get("max_bytes"),
             "five_zip": data.get("5_digit_zip", 1),
             "max_row_cnt": data.get("max_row_cnt"),

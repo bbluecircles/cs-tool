@@ -1,47 +1,35 @@
 /**
- * Editable cell.
+ * Click-to-edit cell. Driven by the column's ColumnDef so the input type
+ * (text / number / flag-select / enum-select) comes from the config.
  *
- * Resting state shows the current (or pending) value, styled subtly to
- * indicate editability. Clicking puts it in edit mode with a focused input;
- * Enter or blur commits the new value to the dirty store; Escape reverts.
- *
- * For 0/1 flag columns, we render a select dropdown instead of a text input
- * since there are only two valid values and a click-to-edit select is
- * faster than typing.
+ * On commit (blur or Enter) we call onCommit with the new value. Escape
+ * cancels. A dirty cell shows a warning-tinted background and a small dot.
  */
 import { KeyboardEvent, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import type { EditableColumnDescriptor } from '@/api/edits'
+import type { ColumnDef } from '../resources/resourceConfigs'
+import { DatabasePicker } from '../resources/DatabasePicker'
 
 interface EditableCellProps {
-  /** The current persisted value from the row. */
+  column: ColumnDef
   originalValue: unknown
-  /** The pending dirty value, if any; otherwise falls back to originalValue. */
   pendingValue: unknown
-  /** True if the field is marked dirty (pending differs from original). */
   dirty: boolean
-  /** Column metadata from /api/edit/columns — drives input type & bounds. */
-  descriptor: EditableColumnDescriptor
-  /** Called when the user commits a new value. */
-  onCommit: (value: unknown) => void
-  /** Disables editing (e.g. row save in progress). */
   disabled?: boolean
-  /** How to render a read-only value (reuses the column's cell formatter). */
-  format?: (v: unknown) => string
+  onCommit: (value: unknown) => void
 }
 
 export function EditableCell({
+  column,
   originalValue,
   pendingValue,
   dirty,
-  descriptor,
-  onCommit,
   disabled,
-  format,
+  onCommit,
 }: EditableCellProps) {
   const [editing, setEditing] = useState(false)
-  const currentValue = dirty ? pendingValue : originalValue
-  const displayed = format ? format(currentValue) : formatDefault(currentValue)
+  const current = dirty ? pendingValue : originalValue
+  const displayed = formatForDisplay(column, current)
 
   if (!editing) {
     return (
@@ -58,7 +46,7 @@ export function EditableCell({
         )}
         title={
           dirty
-            ? `Pending: ${displayed} (was ${formatDefault(originalValue)})`
+            ? `Pending: ${displayed} (was ${formatForDisplay(column, originalValue)})`
             : 'Click to edit'
         }
       >
@@ -70,8 +58,8 @@ export function EditableCell({
 
   return (
     <EditingInput
-      descriptor={descriptor}
-      initial={currentValue}
+      column={column}
+      initial={current}
       onCommit={(v) => {
         onCommit(v)
         setEditing(false)
@@ -82,37 +70,41 @@ export function EditableCell({
 }
 
 function EditingInput({
-  descriptor,
+  column,
   initial,
   onCommit,
   onCancel,
 }: {
-  descriptor: EditableColumnDescriptor
+  column: ColumnDef
   initial: unknown
   onCommit: (v: unknown) => void
   onCancel: () => void
 }) {
-  // Render as a select if we have explicit allowed_values (e.g. 0/1 flags)
-  const allowed = descriptor.allowed_values
-  const isFlag =
-    allowed && allowed.length === 2 && allowed.includes(0) && allowed.includes(1)
-
-  if (isFlag) {
-    return <FlagSelect initial={initial} onCommit={onCommit} onCancel={onCancel} />
-  }
-  if (allowed && allowed.length > 0) {
+  // Database picker (myuser.db_database list).
+  if (column.kind === 'database_picker') {
     return (
-      <AllowedSelect
-        allowed={allowed}
+      <DatabasePickerInput
         initial={initial}
         onCommit={onCommit}
         onCancel={onCancel}
       />
     )
   }
+  // Select-like inputs: either flag (0/1) or any column with options.
+  if (column.options && column.options.length > 0) {
+    return (
+      <SelectInput
+        options={column.options}
+        initial={initial}
+        kind={column.kind}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+    )
+  }
   return (
-    <TextInput
-      descriptor={descriptor}
+    <TextLikeInput
+      column={column}
       initial={initial}
       onCommit={onCommit}
       onCancel={onCancel}
@@ -120,7 +112,7 @@ function EditingInput({
   )
 }
 
-function FlagSelect({
+function DatabasePickerInput({
   initial,
   onCommit,
   onCancel,
@@ -129,14 +121,16 @@ function FlagSelect({
   onCommit: (v: unknown) => void
   onCancel: () => void
 }) {
-  const ref = useRef<HTMLSelectElement>(null)
-  useEffect(() => ref.current?.focus(), [])
+  // The original committed value sits unchanged in state until the
+  // agent picks a different one. preserveUnknownValue keeps a legacy
+  // database_name visible in the dropdown even if it isn't in the
+  // current db_database list — without it the cell would visually
+  // "blank" the moment editing opens.
+  const [value, setValue] = useState<string | null>(
+    typeof initial === 'string' && initial !== '' ? initial : null,
+  )
   return (
-    <select
-      ref={ref}
-      defaultValue={String(initial ?? 0)}
-      className="input py-0.5 px-1 text-xs w-auto"
-      onBlur={(e) => onCommit(Number(e.currentTarget.value))}
+    <div
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault()
@@ -144,31 +138,52 @@ function FlagSelect({
         }
       }}
     >
-      <option value="0">No</option>
-      <option value="1">Yes</option>
-    </select>
+      <DatabasePicker
+        value={value}
+        onChange={(v) => {
+          setValue(v)
+          // Commit immediately on change — matches the select-blur feel of
+          // SelectInput. Escape still cancels if the agent opened by mistake.
+          onCommit(v)
+        }}
+        preserveUnknownValue
+        className="input py-0.5 px-1 text-xs w-auto"
+      />
+    </div>
   )
 }
 
-function AllowedSelect({
-  allowed,
+function SelectInput({
+  options,
   initial,
+  kind,
   onCommit,
   onCancel,
 }: {
-  allowed: unknown[]
+  options: { value: string | number; label: string }[]
   initial: unknown
+  kind: ColumnDef['kind']
   onCommit: (v: unknown) => void
   onCancel: () => void
 }) {
   const ref = useRef<HTMLSelectElement>(null)
   useEffect(() => ref.current?.focus(), [])
+
+  function commit(raw: string) {
+    // Coerce back to the underlying type — int for flag/int kinds, string otherwise.
+    if (kind === 'flag' || kind === 'int') {
+      onCommit(raw === '' ? null : Number(raw))
+    } else {
+      onCommit(raw)
+    }
+  }
+
   return (
     <select
       ref={ref}
-      defaultValue={String(initial ?? '')}
+      defaultValue={initial === null || initial === undefined ? '' : String(initial)}
       className="input py-0.5 px-1 text-xs w-auto"
-      onBlur={(e) => onCommit(e.currentTarget.value)}
+      onBlur={(e) => commit(e.currentTarget.value)}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault()
@@ -176,28 +191,28 @@ function AllowedSelect({
         }
       }}
     >
-      {allowed.map((v) => (
-        <option key={String(v)} value={String(v)}>
-          {String(v)}
+      {options.map((o) => (
+        <option key={String(o.value)} value={String(o.value)}>
+          {o.label}
         </option>
       ))}
     </select>
   )
 }
 
-function TextInput({
-  descriptor,
+function TextLikeInput({
+  column,
   initial,
   onCommit,
   onCancel,
 }: {
-  descriptor: EditableColumnDescriptor
+  column: ColumnDef
   initial: unknown
   onCommit: (v: unknown) => void
   onCancel: () => void
 }) {
   const ref = useRef<HTMLInputElement>(null)
-  const [value, setValue] = useState<string>(
+  const [value, setValue] = useState(
     initial === null || initial === undefined ? '' : String(initial),
   )
   useEffect(() => {
@@ -205,20 +220,17 @@ function TextInput({
     ref.current?.select()
   }, [])
 
-  const isNumeric = descriptor.kind === 'int' || descriptor.kind === 'bigint'
+  const isNumeric = column.kind === 'int'
 
   function commit() {
-    if (value === '' && descriptor.nullable) {
+    if (value === '') {
       onCommit(null)
       return
     }
     if (isNumeric) {
       const n = Number(value)
-      if (Number.isFinite(n)) {
-        onCommit(n)
-      } else {
-        onCancel()  // invalid input; just cancel
-      }
+      if (Number.isFinite(n)) onCommit(n)
+      else onCancel()
       return
     }
     onCommit(value)
@@ -237,20 +249,30 @@ function TextInput({
   return (
     <input
       ref={ref}
-      type={isNumeric ? 'number' : 'text'}
+      type={isNumeric ? 'number' : column.isPassword ? 'password' : 'text'}
       value={value}
       onChange={(e) => setValue(e.target.value)}
       onBlur={commit}
       onKeyDown={onKeyDown}
-      maxLength={descriptor.max_length ?? undefined}
-      min={descriptor.min_value ?? undefined}
-      max={descriptor.max_value ?? undefined}
+      maxLength={column.maxLength}
+      min={column.min}
+      max={column.max}
       className="input py-0.5 px-1 text-xs w-full min-w-[80px]"
     />
   )
 }
 
-function formatDefault(v: unknown): string {
-  if (v === null || v === undefined || v === '') return '—'
-  return String(v)
+function formatForDisplay(column: ColumnDef, value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (column.kind === 'flag') return value === 1 || value === '1' ? 'Yes' : 'No'
+  if (column.kind === 'datetime') {
+    return String(value).replace('T', ' ').slice(0, 16)
+  }
+  if (column.options) {
+    const opt = column.options.find(
+      (o) => String(o.value) === String(value),
+    )
+    return opt ? opt.label : String(value)
+  }
+  return String(value)
 }

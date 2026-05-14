@@ -249,10 +249,10 @@ export function ResourcePage({ config }: ResourcePageProps) {
         <DeleteConfirmModal
           slug={config.slug}
           recId={Number(deleteTarget.rec_id)}
-          rowDescription={
-            `${deleteTarget.database_name ?? 'dataset'} ` +
-            `(customer ${deleteTarget.customer_code})`
-          }
+          entityLabel={deleteEntityLabel(config.slug)}
+          rowDescription={deleteRowDescription(config.slug, deleteTarget)}
+          tableName={deleteTableName(config.slug)}
+          impactKind={config.deleteImpactKind ?? 'none'}
           onClose={() => setDeleteTarget(null)}
           onConfirm={confirmDelete}
           isDeleting={deleteM.isPending}
@@ -275,4 +275,41 @@ export function ResourcePage({ config }: ResourcePageProps) {
       )}
     </div>
   )
+}
+
+// ---------------------------------------------------------------------------
+// Per-resource delete copy.
+//
+// These exist because the row description is the one piece of delete UX
+// that can't be generic — it needs to surface the row's identifying fields
+// in human language. Keeping them inline here (rather than on the config)
+// because they touch row-shape, which is closer to the page than the
+// config registry.
+// ---------------------------------------------------------------------------
+
+function deleteEntityLabel(slug: string): string {
+  switch (slug) {
+    case 'customer-datasets': return 'this dataset'
+    case 'ppi-datasets':      return 'this PPI row'
+    default:                  return 'this row'
+  }
+}
+
+function deleteTableName(slug: string): string {
+  switch (slug) {
+    case 'customer-datasets': return 'secure.customer_dataset'
+    case 'ppi-datasets':      return 'secure.ppi_dataset'
+    default:                  return ''
+  }
+}
+
+function deleteRowDescription(slug: string, row: Row): string {
+  switch (slug) {
+    case 'customer-datasets':
+      return `${row.database_name ?? 'dataset'} (customer ${row.customer_code})`
+    case 'ppi-datasets':
+      return `${row.ppi_state ?? 'PPI row'} (customer ${row.customer_code})`
+    default:
+      return `row ${row.rec_id ?? ''}`
+  }
 }

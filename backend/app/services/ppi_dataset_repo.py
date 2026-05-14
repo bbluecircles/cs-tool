@@ -1,7 +1,7 @@
 """Repository for secure.ppi_dataset.
 
 Primary key: rec_id (autoincrement).
-Edit/Create allowed. Delete NOT allowed.
+Edit/Create/Delete all allowed.
 """
 
 from __future__ import annotations
@@ -143,3 +143,18 @@ def update_ppi_dataset(
         ),
         params,
     )
+
+
+def delete_ppi_dataset(conn: Connection, rec_id: int) -> int:
+    """Hard delete. Returns 1 if a row was deleted, 0 otherwise.
+
+    PPI rows aren't joined to individual users the way customer_dataset
+    rows are, so there's no per-row user-fanout to warn about. Customer-
+    level PPI access is gated by the ``ppiuser`` flag on customer_users,
+    which is unaffected by deleting a row here.
+    """
+    result = conn.execute(
+        text("DELETE FROM secure.ppi_dataset WHERE rec_id = :rid"),
+        {"rid": rec_id},
+    )
+    return result.rowcount

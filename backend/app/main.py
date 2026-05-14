@@ -15,6 +15,7 @@ from app.api import (
     customer_datasets,
     customer_users,
     customers,
+    db_databases,
     health,
     ppi_datasets,
 )
@@ -64,4 +65,5 @@ app.include_router(customers.router)
 app.include_router(customer_users.router)
 app.include_router(customer_datasets.router)
 app.include_router(ppi_datasets.router)
+app.include_router(db_databases.router)
 app.include_router(admin.router)

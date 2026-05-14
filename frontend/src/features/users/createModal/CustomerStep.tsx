@@ -23,7 +23,7 @@ export type CustomerStepValue =
   | {
       mode: 'new'
       customer_name: string
-      entity_code: string
+      entity_code: number | null
       max_bytes: number | null
       '5_digit_zip': 0 | 1
       max_row_cnt: number | null
@@ -53,7 +53,7 @@ export function CustomerStep({
       onChange({
         mode: 'new',
         customer_name: '',
-        entity_code: '',
+        entity_code: null,
         max_bytes: 24_000_000,
         '5_digit_zip': 1,
         max_row_cnt: 200_000,
@@ -126,14 +126,18 @@ export function CustomerStep({
               autoFocus
             />
           </Field>
-          <Field label="Entity code" error={errors.entity_code ?? null}>
-            <TextField
+          <Field
+            label="Entity code"
+            hint="Optional. Defaults to the new customer code. Set to an existing customer's code only to enable cross-customer sharing."
+            error={errors.entity_code ?? null}
+          >
+            <NumberField
               value={value.entity_code}
               onChange={(v) =>
                 onChange({ ...value, entity_code: v })
               }
-              maxLength={15}
-              invalid={!!errors.entity_code}
+              min={1}
+              max={32767}
             />
           </Field>
           <Field label="Max rows" hint="Per-query row cap">
@@ -219,7 +223,9 @@ export function toCustomerPayload(
   return {
     mode: 'new',
     customer_name: v.customer_name.trim(),
-    entity_code: v.entity_code.trim() || null,
+    // Omit entity_code when null — the backend will default it to the
+    // auto-assigned customer_code.
+    ...(v.entity_code !== null ? { entity_code: v.entity_code } : {}),
     max_bytes: v.max_bytes,
     '5_digit_zip': v['5_digit_zip'],
     max_row_cnt: v.max_row_cnt,
@@ -238,8 +244,15 @@ export function validateCustomerStep(
     } else if (v.customer_name.length > 80) {
       errors.customer_name = 'Max 80 characters.'
     }
-    if (v.entity_code && v.entity_code.length > 15) {
-      errors.entity_code = 'Max 15 characters.'
+    // entity_code is optional. When provided it must be a valid int.
+    if (v.entity_code !== null) {
+      if (
+        !Number.isInteger(v.entity_code) ||
+        v.entity_code < 1 ||
+        v.entity_code > 32767
+      ) {
+        errors.entity_code = 'Must be an integer between 1 and 32767.'
+      }
     }
   }
   return errors

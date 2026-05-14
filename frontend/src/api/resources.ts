@@ -138,3 +138,13 @@ export function revealPassword(
     `/api/customer-users/${encodeURIComponent(user_id)}/${customer_code}/password`,
   )
 }
+
+export interface DbDatabaseRow {
+  db_connection_id: number
+  database_name: string
+  database_description: string | null
+}
+
+export function fetchDbDatabases(): Promise<{ rows: DbDatabaseRow[] }> {
+  return api.get('/api/db-databases')
+}
