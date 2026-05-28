@@ -143,6 +143,10 @@ export interface DbDatabaseRow {
   db_connection_id: number
   database_name: string
   database_description: string | null
+  feat_inpatient: number,
+  feat_outpatient: number,
+  feat_ed: number,
+  feat_aprdrg: number
 }
 
 export function fetchDbDatabases(): Promise<{ rows: DbDatabaseRow[] }> {

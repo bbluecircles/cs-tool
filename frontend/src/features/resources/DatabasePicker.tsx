@@ -7,8 +7,101 @@
  * Modeled on CustomerPicker. Same staleTime convention so the list is
  * fetched once per session-ish and reused across modals/cells.
  */
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { fetchDbDatabases } from '@/api/resources'
+import type { QueryClient } from '@tanstack/react-query'
+import type { DbDatabaseRow } from '@/api/resources'
+
+/**
+ * Per-database feature availability. Drives the IP/OP/ED/APR-DRG locks
+ * in the dataset create form and inline edit. Mirrors the four
+ * feat_* fields in DbDatabaseRow.
+ *
+ * available[k] = true  → the feature can be selected for this database
+ * available[k] = false → locked to No (UI disables the select and forces 0)
+ */
+export interface DbFeatures {
+  inpatient: boolean
+  outpatient: boolean
+  ed: boolean
+  aprdrg: boolean
+}
+
+/**
+ * Default for "no database selected" or "database unknown" — everything
+ * locked. The create form uses this to keep the four selects disabled
+ * until a database is picked.
+ */
+export const NO_DB_FEATURES: DbFeatures = {
+  inpatient: false,
+  outpatient: false,
+  ed: false,
+  aprdrg: false,
+}
+
+/**
+ * Look up feature availability for the given database_name. Reads from
+ * the same react-query cache the DatabasePicker uses, so this is
+ * synchronous after the first fetch.
+ *
+ * Returns NO_DB_FEATURES if:
+ *   - database_name is null/empty (nothing selected yet)
+ *   - the cache hasn't loaded yet
+ *   - the database isn't in db_database (legacy row, etc.)
+ * In all those cases the safer default is "everything locked".
+ */
+export function useDbFeatures(database_name: string | null | undefined): DbFeatures {
+  const q = useQuery({
+    queryKey: ['db-database-picker'],
+    queryFn: fetchDbDatabases,
+    staleTime: 60_000,
+  })
+  if (!database_name) return NO_DB_FEATURES
+  const row = q.data?.rows.find((r) => r.database_name === database_name)
+  if (!row) return NO_DB_FEATURES
+  return {
+    inpatient:  row.feat_inpatient  === 1,
+    outpatient: row.feat_outpatient === 1,
+    ed:         row.feat_ed         === 1,
+    aprdrg:     row.feat_aprdrg     === 1,
+  }
+}
+
+/**
+ * Sync version of useDbFeatures for use outside React component scope
+ * (e.g. TanStack Table cell render callbacks). Reads from the same
+ * react-query cache; returns NO_DB_FEATURES if the cache hasn't loaded.
+ */
+export function lookupDbFeatures(
+  qc: QueryClient,
+  database_name: string | null | undefined,
+): DbFeatures {
+  if (!database_name) return NO_DB_FEATURES
+  const data = qc.getQueryData<{ rows: DbDatabaseRow[] }>(['db-database-picker'])
+  const row = data?.rows.find((r) => r.database_name === database_name)
+  if (!row) return NO_DB_FEATURES
+  return {
+    inpatient:  row.feat_inpatient  === 1,
+    outpatient: row.feat_outpatient === 1,
+    ed:         row.feat_ed         === 1,
+    aprdrg:     row.feat_aprdrg     === 1,
+  }
+}
+
+/**
+ * True if a database supports at least one discharge feature
+ * (inpatient / outpatient / ed / aprdrg). Databases with all four at 0
+ * have nothing to offer a discharge dataset and are filtered out of the
+ * Create Discharge picker.
+ */
+export function hasAnyDischargeFeature(r: DbDatabaseRow): boolean {
+  return (
+    r.feat_inpatient === 1 ||
+    r.feat_outpatient === 1 ||
+    r.feat_ed === 1 ||
+    r.feat_aprdrg === 1
+  )
+}
 
 interface DatabasePickerProps {
   value: string | null
@@ -23,6 +116,13 @@ interface DatabasePickerProps {
    * pick a different value to change it.
    */
   preserveUnknownValue?: boolean
+  /**
+   * When true, only databases that support at least one discharge
+   * feature (IP/OP/ED/APR-DRG) are listed. Used by the Create Discharge
+   * modal — a database with all four flags at 0 can't back a discharge
+   * dataset, so offering it would only let the agent create a dead row.
+   */
+  requireDischargeFeatures?: boolean
 }
 
 export function DatabasePicker({
@@ -32,6 +132,7 @@ export function DatabasePicker({
   required,
   className,
   preserveUnknownValue,
+  requireDischargeFeatures,
 }: DatabasePickerProps) {
   const q = useQuery({
     queryKey: ['db-database-picker'],
@@ -39,7 +140,10 @@ export function DatabasePicker({
     staleTime: 60_000,
   })
 
-  const rows = q.data?.rows ?? []
+  const allRows = q.data?.rows ?? []
+  const rows = requireDischargeFeatures
+    ? allRows.filter(hasAnyDischargeFeature)
+    : allRows
   const knownNames = new Set(rows.map((r) => r.database_name))
   const showLegacyValue =
     preserveUnknownValue && value != null && value !== '' && !knownNames.has(value)

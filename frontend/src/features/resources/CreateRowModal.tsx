@@ -11,7 +11,7 @@ import { ApiError } from '@/api/client'
 import { createResource } from '@/api/resources'
 import type { ColumnDef, ResourceConfig } from './resourceConfigs'
 import { CustomerPicker } from './CustomerPicker'
-import { DatabasePicker } from './DatabasePicker'
+import { DatabasePicker, useDbFeatures } from './DatabasePicker'
 import { ModalShell } from './ModalShell'
 
 interface CreateRowModalProps {
@@ -42,8 +42,48 @@ export function CreateRowModal({
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
 
+  // Feature flags for the currently picked database (if any). Drives the
+  // IP/OP/ED/APR-DRG locks. NO_DB_FEATURES until a database is selected.
+  const dbName =
+    typeof values.database_name === 'string' ? values.database_name : null
+  const features = useDbFeatures(dbName)
+
+  // Apply per-column value overrides. When a column has a
+  // computeDisabledOverride that returns { valueOverride: X }, force the
+  // form state to X. This is what locks IP/OP/ED/APR-DRG to 0 when the
+  // database doesn't support them. Submitted payload reflects what the
+  // user sees.
+  const effectiveValues = useMemo(() => {
+    const out: Record<string, unknown> = { ...values }
+    for (const c of createFields) {
+      if (!c.computeDisabledOverride) continue
+      const override = c.computeDisabledOverride(values, features)
+      if (override && 'valueOverride' in override && override.valueOverride !== undefined) {
+        out[c.key] = override.valueOverride
+      }
+    }
+    return out
+  }, [values, features, createFields])
+
+  function setValue(key: string, v: unknown) {
+    setValues((prev) => {
+      const next = { ...prev, [key]: v }
+      // When the database selection changes, reset every column whose
+      // disabled-override depends on db features. Per spec: agent must
+      // re-pick IP/OP/ED/APR-DRG after switching databases.
+      if (key === 'database_name') {
+        for (const c of createFields) {
+          if (c.computeDisabledOverride) {
+            next[c.key] = 0
+          }
+        }
+      }
+      return next
+    })
+  }
+
   const m = useMutation({
-    mutationFn: () => createResource(config.slug, values),
+    mutationFn: () => createResource(config.slug, effectiveValues),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [config.slug] })
       // Customers list also powers pickers elsewhere.
@@ -56,7 +96,7 @@ export function CreateRowModal({
     const next: Record<string, string> = {}
     for (const c of createFields) {
       if (c.requiredOnCreate) {
-        const v = values[c.key]
+        const v = effectiveValues[c.key]
         if (v === null || v === undefined || v === '') {
           next[c.key] = 'Required.'
         }
@@ -99,17 +139,19 @@ export function CreateRowModal({
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3">
-        {createFields.map((col) => (
-          <FieldRow
-            key={col.key}
-            column={col}
-            value={values[col.key]}
-            error={errors[col.key]}
-            onChange={(v) =>
-              setValues((prev) => ({ ...prev, [col.key]: v }))
-            }
-          />
-        ))}
+        {createFields.map((col) => {
+          const override = col.computeDisabledOverride?.(values, features) ?? null
+          return (
+            <FieldRow
+              key={col.key}
+              column={col}
+              value={effectiveValues[col.key]}
+              error={errors[col.key]}
+              disabled={override?.disabled ?? false}
+              onChange={(v) => setValue(col.key, v)}
+            />
+          )
+        })}
       </div>
 
       {submitError && (
@@ -144,11 +186,13 @@ function FieldRow({
   column,
   value,
   error,
+  disabled,
   onChange,
 }: {
   column: ColumnDef
   value: unknown
   error?: string
+  disabled?: boolean
   onChange: (v: unknown) => void
 }) {
   const spanClass =
@@ -165,7 +209,13 @@ function FieldRow({
         {column.label}
         {column.requiredOnCreate && <span className="ml-0.5 text-error-600">*</span>}
       </label>
-      <FieldInput column={column} value={value} onChange={onChange} invalid={!!error} />
+      <FieldInput
+        column={column}
+        value={value}
+        onChange={onChange}
+        invalid={!!error}
+        disabled={disabled}
+      />
       {error && <div className="text-[11px] text-error-600">{error}</div>}
     </div>
   )
@@ -176,11 +226,13 @@ function FieldInput({
   value,
   onChange,
   invalid,
+  disabled,
 }: {
   column: ColumnDef
   value: unknown
   onChange: (v: unknown) => void
   invalid?: boolean
+  disabled?: boolean
 }) {
   const cls = `input ${invalid ? 'input-error' : ''}`
 
@@ -191,6 +243,7 @@ function FieldInput({
         onChange={(v) => onChange(v)}
         required={column.requiredOnCreate}
         className={cls}
+        disabled={disabled}
       />
     )
   }
@@ -202,6 +255,8 @@ function FieldInput({
         onChange={(v) => onChange(v)}
         required={column.requiredOnCreate}
         className={cls}
+        disabled={disabled}
+        requireDischargeFeatures={column.pickerRequireDischargeFeatures}
       />
     )
   }
@@ -210,6 +265,7 @@ function FieldInput({
     return (
       <select
         className={cls}
+        disabled={disabled}
         value={value === null || value === undefined ? '' : String(value)}
         onChange={(e) => {
           if (column.kind === 'flag' || column.kind === 'int') {
@@ -233,6 +289,7 @@ function FieldInput({
       <input
         type="number"
         className={cls}
+        disabled={disabled}
         value={typeof value === 'number' ? value : ''}
         min={column.min}
         max={column.max}
@@ -252,6 +309,7 @@ function FieldInput({
     <input
       type={column.isPassword ? 'text' : 'text'}
       className={cls}
+      disabled={disabled}
       value={typeof value === 'string' ? value : ''}
       maxLength={column.maxLength}
       onChange={(e) => onChange(e.target.value)}

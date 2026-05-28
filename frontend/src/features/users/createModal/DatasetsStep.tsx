@@ -12,6 +12,7 @@
  */
 import type { DatasetInput, PpiDatasetInput } from '@/api/create_user'
 import { Field, SectionHeader, TextField, Toggle } from './formFields'
+import { DatabasePicker, useDbFeatures } from '../../resources/DatabasePicker'
 
 export interface DatasetsStepValue {
   datasets: DatasetInput[]
@@ -50,11 +51,13 @@ export function DatasetsStep({
         ...value.datasets,
         {
           database_name: '',
-          inpatient: 1,
+          // All discharge flags start off; the agent enables the ones the
+          // chosen database supports. dataset_type is always 'd' here —
+          // claims/PPI rows are added in the PPI section below.
+          inpatient: 0,
           outpatient: 0,
           ed: 0,
-          claritas_flag: 1,
-          claritas_state: '',
+          aprdrg_flag: 0,
           dataset_type: 'd',
         },
       ],
@@ -164,29 +167,34 @@ function DatasetRow({
   onRemove: () => void
   error?: string | null
 }) {
+  // Feature availability for the picked database. NO_DB_FEATURES (all
+  // false) until a database is selected, which keeps every flag toggle
+  // disabled + off.
+  const features = useDbFeatures(dataset.database_name || null)
+
+  // Changing the database resets all four discharge flags to off — the
+  // agent re-picks against the new database's capabilities. Matches the
+  // standalone Create Discharge modal's behavior.
+  function onDatabaseChange(v: string | null) {
+    onChange({
+      database_name: v ?? '',
+      inpatient: 0,
+      outpatient: 0,
+      ed: 0,
+      aprdrg_flag: 0,
+    })
+  }
+
   return (
     <div className="rounded-md border border-border bg-gray-50 p-3">
-      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
+      <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
         <Field label="Database name" required error={error ?? null}>
-          <TextField
-            value={dataset.database_name}
-            onChange={(v) => onChange({ database_name: v })}
-            maxLength={25}
-            invalid={!!error}
+          <DatabasePicker
+            value={dataset.database_name || null}
+            onChange={onDatabaseChange}
+            required
+            requireDischargeFeatures
           />
-        </Field>
-        <Field label="Dataset type">
-          <select
-            className="input"
-            value={dataset.dataset_type ?? ''}
-            onChange={(e) =>
-              onChange({ dataset_type: e.target.value || null })
-            }
-          >
-            <option value="">(none)</option>
-            <option value="d">d — discharge</option>
-            <option value="c">c — claims</option>
-          </select>
         </Field>
         <button
           type="button"
@@ -198,25 +206,29 @@ function DatasetRow({
         </button>
       </div>
       <div className="mt-3 grid grid-cols-4 gap-2">
-        <FlagToggle
-          label="Inpatient"
+        <FeatureToggle
+          label="IP"
           checked={!!dataset.inpatient}
+          available={features.inpatient}
           onChange={(b) => onChange({ inpatient: b ? 1 : 0 })}
         />
-        <FlagToggle
-          label="Outpatient"
+        <FeatureToggle
+          label="OP"
           checked={!!dataset.outpatient}
+          available={features.outpatient}
           onChange={(b) => onChange({ outpatient: b ? 1 : 0 })}
         />
-        <FlagToggle
+        <FeatureToggle
           label="ED"
           checked={!!dataset.ed}
+          available={features.ed}
           onChange={(b) => onChange({ ed: b ? 1 : 0 })}
         />
-        <FlagToggle
-          label="SG2"
-          checked={!!dataset.sg2}
-          onChange={(b) => onChange({ sg2: b ? 1 : 0 })}
+        <FeatureToggle
+          label="APR-DRG"
+          checked={!!dataset.aprdrg_flag}
+          available={features.aprdrg}
+          onChange={(b) => onChange({ aprdrg_flag: b ? 1 : 0 })}
         />
       </div>
     </div>
@@ -246,12 +258,12 @@ function PpiRow({
             placeholder="e.g. az"
           />
         </Field>
-        <FlagToggle
+        <Toggle
           label="Detail"
           checked={ppi.ppi_detail === 1}
           onChange={(b) => onChange({ ppi_detail: b ? 1 : 0 })}
         />
-        <FlagToggle
+        <Toggle
           label="Summary"
           checked={ppi.ppi_summary === 1}
           onChange={(b) => onChange({ ppi_summary: b ? 1 : 0 })}
@@ -268,17 +280,37 @@ function PpiRow({
   )
 }
 
-function FlagToggle({
+/**
+ * Discharge-feature toggle. When the picked database doesn't support the
+ * feature (`available={false}`), the toggle is disabled and shown off,
+ * regardless of the stored value. Once a database that supports it is
+ * picked, it becomes interactive again.
+ *
+ * Note the reset-on-database-change in DatasetRow already zeroes these
+ * when the database switches, so `available={false} && checked` should
+ * be transient — but we render off defensively in case state lags.
+ */
+function FeatureToggle({
   label,
   checked,
+  available,
   onChange,
 }: {
   label: string
   checked: boolean
+  available: boolean
   onChange: (b: boolean) => void
 }) {
   return (
-    <Toggle label={label} checked={checked} onChange={onChange} />
+    <Toggle
+      label={label}
+      checked={available && checked}
+      disabled={!available}
+      onChange={(b) => {
+        if (!available) return
+        onChange(b)
+      }}
+    />
   )
 }
 

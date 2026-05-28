@@ -26,6 +26,12 @@ class DbDatabaseRow(BaseModel):
     db_connection_id: int
     database_name: str
     database_description: str | None = None
+    # Per-database feature flags from myuser.db_feature_list (0/1).
+    # Drive the IP/OP/ED/APR-DRG locks in the dataset create/edit UI.
+    feat_inpatient: int = 0
+    feat_outpatient: int = 0
+    feat_ed: int = 0
+    feat_aprdrg: int = 0
 
 
 class DbDatabaseListResponse(BaseModel):

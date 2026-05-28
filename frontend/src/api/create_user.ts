@@ -40,6 +40,8 @@ export interface DatasetInput {
   export_flag?: 0 | 1
   export_row_limit?: number
   webapp_flag?: 0 | 1
+  /** Always 'd' from the create-user wizard's discharge section. */
+  dataset_type?: string | null
 }
 
 export interface PpiDatasetInput {

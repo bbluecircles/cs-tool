@@ -21,11 +21,14 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import type { ResourceFilter } from '@/api/resources'
+import { fetchDbDatabases } from '@/api/resources'
 import type { ResourceConfig } from './resourceConfigs'
 import { ColumnFilterInput } from './ColumnFilterInput'
 import { EditableCell } from './EditableCell'
+import { lookupDbFeatures } from './DatabasePicker'
 import { PasswordCell } from './PasswordCell'
 import type { UseDirtyRows } from './useDirtyRows'
 
@@ -71,6 +74,23 @@ export function ResourceTable({
     () => config.columns.filter((c) => c.show !== false),
     [config],
   )
+
+  // Prefetch the db_database list so the cache is warm before the agent
+  // clicks into an IP/OP/ED/APR-DRG cell. We read from the cache via
+  // lookupDbFeatures inside each cell's render callback, and include
+  // the query result in the columns memo deps so the table re-renders
+  // once the list resolves.
+  const qc = useQueryClient()
+  const hasFeatureGatedColumns = useMemo(
+    () => visibleConfigCols.some((c) => c.computeDisabledOverride),
+    [visibleConfigCols],
+  )
+  const dbFeaturesQuery = useQuery({
+    queryKey: ['db-database-picker'],
+    queryFn: fetchDbDatabases,
+    staleTime: 60_000,
+    enabled: hasFeatureGatedColumns,
+  })
 
   const columns = useMemo<ColumnDef<Row>[]>(() => {
     const tableCols: ColumnDef<Row>[] = visibleConfigCols.map((col) => {
@@ -128,13 +148,34 @@ export function ResourceTable({
               </span>
             )
           }
+
+          // Cross-field override: if the column's computeDisabledOverride
+          // says this row's database doesn't support the feature, render
+          // a disabled cell forced to the override value. Same enforcement
+          // path the create modal uses.
+          let displayValue: unknown = rowObj[col.key]
+          let cellDisabled = isSaving
+          if (col.computeDisabledOverride) {
+            const features = lookupDbFeatures(
+              qc,
+              typeof rowObj.database_name === 'string' ? rowObj.database_name : null,
+            )
+            const override = col.computeDisabledOverride(rowObj, features)
+            if (override) {
+              if (override.disabled) cellDisabled = true
+              if (override.valueOverride !== undefined) {
+                displayValue = override.valueOverride
+              }
+            }
+          }
+
           return (
             <EditableCell
               column={col}
-              originalValue={rowObj[col.key]}
+              originalValue={displayValue}
               pendingValue={pending}
               dirty={isDirty}
-              disabled={isSaving}
+              disabled={cellDisabled}
               onCommit={(v) =>
                 dirty.setField(key, col.key, v, rowObj[col.key])
               }
@@ -201,7 +242,7 @@ export function ResourceTable({
     return tableCols
   }, [
     visibleConfigCols, config, dirty, onDeleteRow, onDiscardRow, onSaveRow,
-    savingRowKey,
+    savingRowKey, qc, dbFeaturesQuery.data,
   ])
 
   const table = useReactTable({

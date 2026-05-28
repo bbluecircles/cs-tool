@@ -151,7 +151,10 @@ def create_customer_dataset(conn: Connection, data: dict[str, Any]) -> int:
             "projection_flag": data.get("projection_flag", 0),
             "cms_states": data.get("cms_states"),
             "transfers_flag": data.get("transfers_flag", 0),
-            "dataset_type": data.get("dataset_type"),
+            # Always discharge from this repo. The Type field was removed
+            # from the Create Discharge modal; PPI rows go through a
+            # different repo (ppi_dataset_repo) with their own dataset_type.
+            "dataset_type": data.get("dataset_type") or "d",
             "cell_size_limit": data.get("cell_size_limit", 0),
             "export_detail": data.get("export_detail", "y"),
             "aprdrg_flag": data.get("aprdrg_flag", 0),

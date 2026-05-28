@@ -89,6 +89,29 @@ export interface ColumnDef {
   filterable?: boolean
   /** Override the auto-derived filter input type. */
   filterKind?: FilterKind
+  /**
+   * Cross-field disabled / value-override hook. Called by both the
+   * create modal and the inline-edit cell with the current row state
+   * (the in-progress form values for create; the persisted row for
+   * inline-edit). Returns `null` for "no override", or an object with
+   * either:
+   *   - disabled: true  → the input is rendered but read-only
+   *   - valueOverride   → forces a specific value, regardless of what
+   *                       the user might have typed before
+   * Used for IP/OP/ED/APR-DRG which depend on the picked database's
+   * feature flags (myuser.db_features_list).
+   */
+  computeDisabledOverride?: (
+    row: Record<string, unknown>,
+    features: import('./DatabasePicker').DbFeatures,
+  ) => { disabled?: boolean; valueOverride?: unknown } | null
+  /**
+   * For database_picker columns: when true, the dropdown only lists
+   * databases that support at least one discharge feature
+   * (IP/OP/ED/APR-DRG). Used on the Discharge Databases create form so
+   * agents can't pick a database that can't back a discharge dataset.
+   */
+  pickerRequireDischargeFeatures?: boolean
 }
 
 export interface ResourceConfig {
@@ -383,20 +406,40 @@ export const customerDatasetsConfig: ResourceConfig = {
     },
     {
       // Driven by myuser.db_database via /api/db-databases (DatabasePicker).
+      // Only databases with at least one discharge feature are listed.
       key: 'database_name', label: 'Database', kind: 'database_picker',
       editable: true, maxLength: 25,
       showInCreate: true, requiredOnCreate: true,
+      pickerRequireDischargeFeatures: true,
     },
     {
-      // View-only on the table. Still settable in the create form, where
-      // options drive a select. editable=false makes the cell read-only.
+      // View-only on the table; not shown on create. The backend defaults
+      // this to 'd' (discharge) when omitted — see customer_dataset_repo.
+      // PPI/claims datasets go through a different table entirely and
+      // never use this dataset_type.
       key: 'dataset_type', label: 'Type', kind: 'text', editable: false,
-      options: datasetTypeOptions, showInCreate: true, createDefault: 'd',
+      options: datasetTypeOptions, showInCreate: false, createDefault: 'd',
     },
-    flag('outpatient', 'OP'),
-    flag('inpatient', 'IP', { createDefault: 1 }),
-    flag('ed', 'ED'),
-    flag('aprdrg_flag', 'APR-DRG'),
+    // IP/OP/ED/APR-DRG: locked to No unless the picked database supports
+    // the feature in myuser.db_features_list. computeDisabledOverride is
+    // honored by both CreateRowModal and EditableCell.
+    flag('outpatient', 'OP', {
+      computeDisabledOverride: (_row, f) =>
+        f.outpatient ? null : { disabled: true, valueOverride: 0 },
+    }),
+    flag('inpatient', 'IP', {
+      createDefault: 1,
+      computeDisabledOverride: (_row, f) =>
+        f.inpatient ? null : { disabled: true, valueOverride: 0 },
+    }),
+    flag('ed', 'ED', {
+      computeDisabledOverride: (_row, f) =>
+        f.ed ? null : { disabled: true, valueOverride: 0 },
+    }),
+    flag('aprdrg_flag', 'APR-DRG', {
+      computeDisabledOverride: (_row, f) =>
+        f.aprdrg ? null : { disabled: true, valueOverride: 0 },
+    }),
     {
       key: 'export_flag', label: 'Export', kind: 'flag', editable: true,
       options: yesNoOptions, showInCreate: false, createDefault: 1,
