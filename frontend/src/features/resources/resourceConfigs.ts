@@ -179,7 +179,16 @@ function datetime(key: string, label: string): ColumnDef {
 }
 
 // ---------------------------------------------------------------------------
-// Customers (no fields removed)
+// Customers
+//
+// HIDDEN FROM UI (per Stage 7 column-list spec): max_bytes, 5_digit_zip,
+// max_row_cnt. Underlying columns still exist in secure.customer and are
+// still written with defaults at create time by customer_repo. They just
+// don't appear in the table or in the create form anymore.
+//
+// ADDED TO UI: state, customer_desc, cancelled_date (already exist on
+// secure.customer; types assumed varchar(2) / varchar(255) / datetime
+// respectively — adjust if wrong).
 // ---------------------------------------------------------------------------
 
 export const customersConfig: ResourceConfig = {
@@ -193,8 +202,8 @@ export const customersConfig: ResourceConfig = {
   primaryKeyColumns: ['customer_code'],
   sortableColumns: new Set([
     'customer_code', 'customer_name', 'entity_code',
-    'max_bytes', '5_digit_zip', 'max_row_cnt',
-    'create_date', 'modify_date',
+    'state', 'customer_desc',
+    'create_date', 'modify_date', 'cancelled_date',
   ]),
   filterByCustomerCode: false,
   allowDelete: false,
@@ -219,22 +228,31 @@ export const customersConfig: ResourceConfig = {
       showInCreate: true,
     },
     {
+      key: 'state', label: 'State', kind: 'text', editable: true,
+      maxLength: 2, showInCreate: true,
+    },
+    {
+      key: 'customer_desc', label: 'Description', kind: 'text', editable: true,
+      maxLength: 255, showInCreate: true,
+    },
+    {
       key: 'max_bytes', label: 'Max Bytes', kind: 'int', editable: true,
-      min: 0, showInCreate: true, createDefault: 24_000_000,
-      // Hidden from the table; default applied on create, edits not
-      // surfaced through this tool.
+      min: 0, showInCreate: false, createDefault: 24_000_000,
       show: false,
     },
     {
       key: '5_digit_zip', label: '5-Digit Zip', kind: 'flag', editable: true,
-      options: yesNoOptions, showInCreate: true, createDefault: 1,
+      options: yesNoOptions, showInCreate: false, createDefault: 1,
+      show: false,
     },
     {
       key: 'max_row_cnt', label: 'Max Rows', kind: 'int', editable: true,
-      min: 0, showInCreate: true, createDefault: 200_000,
+      min: 0, showInCreate: false, createDefault: 200_000,
+      show: false,
     },
     datetime('create_date', 'Created'),
     datetime('modify_date', 'Modified'),
+    datetime('cancelled_date', 'Cancelled'),
   ],
 }
 
@@ -318,11 +336,16 @@ export const customerUsersConfig: ResourceConfig = {
 }
 
 // ---------------------------------------------------------------------------
-// Customer Datasets — THE ONE WITH DELETE
+// Customer Datasets ("Discharge Databases" in the UI; backend slug stays
+// 'customer-datasets' and the underlying table is secure.customer_dataset).
 //
-// REMOVED FROM UI: sg2, sg2_op, claritas_flag, prism_flag, projection_flag,
+// HIDDEN FROM UI: sg2, sg2_op, claritas_flag, prism_flag, projection_flag,
 // transfers_flag, cell_size_limit, export_detail, export_row_limit,
-// odbc_dataset, webapp_flag.
+// webapp_flag, claritas_state, cms_states, export_flag.
+//
+// dataset_type is settable on create (the UX needs the discharge/claims
+// distinction at create time) but read-only after — agents shouldn't be
+// flipping a dataset's type once it's wired up downstream.
 // ---------------------------------------------------------------------------
 
 const datasetTypeOptions = [
@@ -333,17 +356,16 @@ const datasetTypeOptions = [
 
 export const customerDatasetsConfig: ResourceConfig = {
   slug: 'customer-datasets',
-  label: 'Customer Datasets',
-  shortLabel: 'Datasets',
-  description: 'Datasets attached to customers. Deletes allowed here.',
+  label: 'Discharge Databases',
+  shortLabel: 'Discharge',
+  description: 'Discharge databases attached to customers. Deletes allowed here.',
   buildId: (r) => String(r.rec_id),
   rowKey: (r) => `cd-${r.rec_id}`,
   primaryKeyColumns: ['rec_id'],
   sortableColumns: new Set([
-    'rec_id', 'customer_code', 'database_name',
+    'rec_id', 'customer_code', 'database_name', 'odbc_dataset',
     'inpatient', 'outpatient', 'ed',
-    'claritas_state', 'cms_states',
-    'dataset_type', 'aprdrg_flag', 'export_flag',
+    'dataset_type', 'aprdrg_flag',
     'create_date', 'modify_date',
   ]),
   filterByCustomerCode: true,
@@ -356,20 +378,30 @@ export const customerDatasetsConfig: ResourceConfig = {
       editable: false, showInCreate: true, requiredOnCreate: true,
     },
     {
+      key: 'odbc_dataset', label: 'ODBC Dataset', kind: 'text', editable: true,
+      maxLength: 50, showInCreate: true,
+    },
+    {
       // Driven by myuser.db_database via /api/db-databases (DatabasePicker).
       key: 'database_name', label: 'Database', kind: 'database_picker',
       editable: true, maxLength: 25,
       showInCreate: true, requiredOnCreate: true,
     },
     {
-      key: 'dataset_type', label: 'Type', kind: 'text', editable: true,
+      // View-only on the table. Still settable in the create form, where
+      // options drive a select. editable=false makes the cell read-only.
+      key: 'dataset_type', label: 'Type', kind: 'text', editable: false,
       options: datasetTypeOptions, showInCreate: true, createDefault: 'd',
     },
-    flag('inpatient', 'IP', { createDefault: 1 }),
     flag('outpatient', 'OP'),
+    flag('inpatient', 'IP', { createDefault: 1 }),
     flag('ed', 'ED'),
     flag('aprdrg_flag', 'APR-DRG'),
-    flag('export_flag', 'Export', { createDefault: 1 }),
+    {
+      key: 'export_flag', label: 'Export', kind: 'flag', editable: true,
+      options: yesNoOptions, showInCreate: false, createDefault: 1,
+      show: false,
+    },
     {
       key: 'claritas_state', label: 'Claritas States', kind: 'text', editable: true,
       maxLength: 254, show: false, showInCreate: false,
@@ -384,22 +416,24 @@ export const customerDatasetsConfig: ResourceConfig = {
 }
 
 // ---------------------------------------------------------------------------
-// PPI Datasets
+// PPI Datasets ("Claim Databases" in the UI; backend slug stays 'ppi-datasets'
+// and the underlying table is secure.ppi_dataset).
 //
-// REMOVED FROM UI: cell_size_limit, export_detail
+// HIDDEN FROM UI: ppi_detail, ppi_summary, cell_size_limit, export_detail.
+// Underlying columns still exist in secure.ppi_dataset and are still written
+// at create time by ppi_dataset_repo.
 // ---------------------------------------------------------------------------
 
 export const ppiDatasetsConfig: ResourceConfig = {
   slug: 'ppi-datasets',
-  label: 'PPI Datasets',
-  shortLabel: 'PPI',
-  description: 'PPI state-level datasets. Deletes allowed.',
+  label: 'Claim Databases',
+  shortLabel: 'Claim',
+  description: 'Claim databases attached to customers. Deletes allowed.',
   buildId: (r) => String(r.rec_id),
   rowKey: (r) => `p-${r.rec_id}`,
   primaryKeyColumns: ['rec_id'],
   sortableColumns: new Set([
     'rec_id', 'customer_code', 'ppi_state',
-    'ppi_detail', 'ppi_summary',
     'create_date', 'modify_date',
   ]),
   filterByCustomerCode: true,
@@ -417,8 +451,16 @@ export const ppiDatasetsConfig: ResourceConfig = {
       key: 'ppi_state', label: 'State', kind: 'text', editable: true,
       maxLength: 25, showInCreate: true, requiredOnCreate: true,
     },
-    flag('ppi_detail', 'Detail', { createDefault: 1 }),
-    flag('ppi_summary', 'Summary', { createDefault: 1 }),
+    {
+      key: 'ppi_detail', label: 'Detail', kind: 'flag', editable: true,
+      options: yesNoOptions, showInCreate: false, createDefault: 1,
+      show: false,
+    },
+    {
+      key: 'ppi_summary', label: 'Summary', kind: 'flag', editable: true,
+      options: yesNoOptions, showInCreate: false, createDefault: 1,
+      show: false,
+    },
     datetime('create_date', 'Created'),
     datetime('modify_date', 'Modified'),
   ],

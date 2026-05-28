@@ -24,9 +24,8 @@ export type CustomerStepValue =
       mode: 'new'
       customer_name: string
       entity_code: number | null
-      max_bytes: number | null
-      '5_digit_zip': 0 | 1
-      max_row_cnt: number | null
+      state: string
+      customer_desc: string
     }
 
 interface CustomerStepProps {
@@ -54,9 +53,8 @@ export function CustomerStep({
         mode: 'new',
         customer_name: '',
         entity_code: null,
-        max_bytes: 24_000_000,
-        '5_digit_zip': 1,
-        max_row_cnt: 200_000,
+        state: '',
+        customer_desc: '',
       })
     }
   }
@@ -140,35 +138,21 @@ export function CustomerStep({
               max={32767}
             />
           </Field>
-          <Field label="Max rows" hint="Per-query row cap">
-            <NumberField
-              value={value.max_row_cnt}
-              onChange={(v) => onChange({ ...value, max_row_cnt: v })}
-              min={0}
-              max={2_000_000_000}
+          <Field label="State" hint="Two-letter state code (e.g. AZ)">
+            <TextField
+              value={value.state}
+              onChange={(v) => onChange({ ...value, state: v })}
+              maxLength={2}
+              invalid={!!errors.state}
             />
           </Field>
-          <Field label="Max bytes" hint="Storage quota">
-            <NumberField
-              value={value.max_bytes}
-              onChange={(v) => onChange({ ...value, max_bytes: v })}
-              min={0}
+          <Field label="Description">
+            <TextField
+              value={value.customer_desc}
+              onChange={(v) => onChange({ ...value, customer_desc: v })}
+              maxLength={255}
+              invalid={!!errors.customer_desc}
             />
-          </Field>
-          <Field label="5-digit zip">
-            <select
-              className="input"
-              value={value['5_digit_zip']}
-              onChange={(e) =>
-                onChange({
-                  ...value,
-                  '5_digit_zip': Number(e.target.value) as 0 | 1,
-                })
-              }
-            >
-              <option value={1}>Enabled</option>
-              <option value={0}>Disabled</option>
-            </select>
           </Field>
         </div>
       )}
@@ -226,9 +210,8 @@ export function toCustomerPayload(
     // Omit entity_code when null — the backend will default it to the
     // auto-assigned customer_code.
     ...(v.entity_code !== null ? { entity_code: v.entity_code } : {}),
-    max_bytes: v.max_bytes,
-    '5_digit_zip': v['5_digit_zip'],
-    max_row_cnt: v.max_row_cnt,
+    ...(v.state.trim() ? { state: v.state.trim() } : {}),
+    ...(v.customer_desc.trim() ? { customer_desc: v.customer_desc.trim() } : {}),
   }
 }
 
@@ -253,6 +236,12 @@ export function validateCustomerStep(
       ) {
         errors.entity_code = 'Must be an integer between 1 and 32767.'
       }
+    }
+    if (v.state && v.state.length > 2) {
+      errors.state = 'Max 2 characters.'
+    }
+    if (v.customer_desc && v.customer_desc.length > 255) {
+      errors.customer_desc = 'Max 255 characters.'
     }
   }
   return errors

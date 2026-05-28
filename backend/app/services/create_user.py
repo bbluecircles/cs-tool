@@ -69,24 +69,34 @@ def _next_customer_code(conn: Connection) -> int:
 
 def _insert_customer(conn: Connection, spec: NewCustomerInput) -> int:
     customer_code = _next_customer_code(conn)
+    # entity_code defaults to customer_code when not provided — matches
+    # the convention in existing data (see NewCustomerInput docstring).
+    entity_code = spec.entity_code if spec.entity_code is not None else customer_code
     conn.execute(
         text(
             """
             INSERT INTO secure.customer
-                (customer_code, customer_name, entity_code, max_bytes,
-                 `5_digit_zip`, max_row_cnt)
+                (customer_code, customer_name, entity_code,
+                 state, customer_desc,
+                 max_bytes, `5_digit_zip`, max_row_cnt)
             VALUES
-                (:customer_code, :customer_name, :entity_code, :max_bytes,
-                 :five_zip, :max_row_cnt)
+                (:customer_code, :customer_name, :entity_code,
+                 :state, :customer_desc,
+                 :max_bytes, :five_zip, :max_row_cnt)
             """
         ),
         {
             "customer_code": customer_code,
             "customer_name": spec.customer_name,
-            "entity_code": spec.entity_code,
-            "max_bytes": spec.max_bytes,
-            "five_zip": spec.field_5_digit_zip,
-            "max_row_cnt": spec.max_row_cnt,
+            "entity_code": entity_code,
+            "state": spec.state,
+            "customer_desc": spec.customer_desc,
+            # Hidden in the UI but kept in the DB with historical defaults
+            # so an INSERT here still produces a valid row (the schema may
+            # have NOT NULL on these).
+            "max_bytes": 24_000_000,
+            "five_zip": 1,
+            "max_row_cnt": 200_000,
         },
     )
     return customer_code

@@ -37,9 +37,8 @@ class NewCustomerInput(BaseModel):
     # tsp_entity_users stored proc, which SELECTs entity_code INTO an
     # INT variable.
     entity_code: int | None = Field(default=None, ge=1, le=32767)
-    max_bytes: int | None = Field(default=None, ge=0, le=10_000_000_000_000)
-    field_5_digit_zip: Literal[0, 1] = Field(default=1, alias="5_digit_zip")
-    max_row_cnt: int | None = Field(default=5000, ge=0, le=2_000_000_000)
+    state: Annotated[str, StringConstraints(max_length=2)] | None = None
+    customer_desc: Annotated[str, StringConstraints(max_length=255)] | None = None
 
     model_config = {"populate_by_name": True}
 

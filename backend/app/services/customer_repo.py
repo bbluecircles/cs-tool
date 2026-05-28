@@ -28,6 +28,8 @@ from app.services.filter_parser import (
 EDITABLE_COLUMNS: tuple[str, ...] = (
     "customer_name",
     "entity_code",
+    "state",
+    "customer_desc",
     "max_bytes",
     "5_digit_zip",
     "max_row_cnt",
@@ -37,8 +39,9 @@ EDITABLE_COLUMNS: tuple[str, ...] = (
 # (and the repo's SELECT list) — same on the frontend's resourceConfigs.ts.
 SORTABLE_COLUMNS: frozenset[str] = frozenset({
     "customer_code", "customer_name", "entity_code",
+    "state", "customer_desc",
     "max_bytes", "5_digit_zip", "max_row_cnt",
-    "create_date", "modify_date",
+    "create_date", "modify_date", "cancelled_date",
 })
 
 # Same set today. Kept distinct so a future column can be sortable but
@@ -86,8 +89,9 @@ def list_customers(
         text(
             f"""
             SELECT customer_code, customer_name, entity_code,
+                   state, customer_desc,
                    max_bytes, `5_digit_zip`, max_row_cnt,
-                   create_date, modify_date
+                   create_date, modify_date, cancelled_date
             FROM   secure.customer
             {where_sql}
             {order_sql}
@@ -104,8 +108,9 @@ def get_customer(conn: Connection, customer_code: int) -> dict[str, Any] | None:
         text(
             """
             SELECT customer_code, customer_name, entity_code,
+                   state, customer_desc,
                    max_bytes, `5_digit_zip`, max_row_cnt,
-                   create_date, modify_date
+                   create_date, modify_date, cancelled_date
             FROM   secure.customer
             WHERE  customer_code = :cc
             LIMIT  1
@@ -136,20 +141,29 @@ def create_customer(conn: Connection, data: dict[str, Any]) -> int:
         text(
             """
             INSERT INTO secure.customer
-                (customer_code, customer_name, entity_code, max_bytes,
-                 `5_digit_zip`, max_row_cnt, create_date, modify_date)
+                (customer_code, customer_name, entity_code,
+                 state, customer_desc,
+                 max_bytes, `5_digit_zip`, max_row_cnt,
+                 create_date, modify_date)
             VALUES
-                (:customer_code, :customer_name, :entity_code, :max_bytes,
-                 :five_zip, :max_row_cnt, NOW(), NOW())
+                (:customer_code, :customer_name, :entity_code,
+                 :state, :customer_desc,
+                 :max_bytes, :five_zip, :max_row_cnt,
+                 NOW(), NOW())
             """
         ),
         {
             "customer_code": customer_code,
             "customer_name": data.get("customer_name"),
             "entity_code": entity_code,
-            "max_bytes": data.get("max_bytes"),
+            "state": data.get("state"),
+            "customer_desc": data.get("customer_desc"),
+            # Hidden in the UI but kept in the DB. Apply the historical
+            # defaults so an INSERT with no incoming value still produces
+            # a valid row (the schema may have NOT NULL on these).
+            "max_bytes": data.get("max_bytes") if data.get("max_bytes") is not None else 24_000_000,
             "five_zip": data.get("5_digit_zip", 1),
-            "max_row_cnt": data.get("max_row_cnt"),
+            "max_row_cnt": data.get("max_row_cnt") if data.get("max_row_cnt") is not None else 200_000,
         },
     )
     return customer_code

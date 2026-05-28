@@ -23,9 +23,10 @@ export interface NewCustomerInput {
    * in existing data). See create_user.py for full rationale.
    */
   entity_code?: number
-  max_bytes?: number | null
-  '5_digit_zip'?: 0 | 1
-  max_row_cnt?: number | null
+  /** Two-letter state code, optional. */
+  state?: string
+  /** Free-form description, optional. Max 255 chars. */
+  customer_desc?: string
 }
 
 export interface DatasetInput {
