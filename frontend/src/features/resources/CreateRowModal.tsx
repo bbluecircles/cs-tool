@@ -257,6 +257,7 @@ function FieldInput({
         className={cls}
         disabled={disabled}
         requireDischargeFeatures={column.pickerRequireDischargeFeatures}
+        requireNoDischargeFeatures={column.pickerRequireNoDischargeFeatures}
       />
     )
   }

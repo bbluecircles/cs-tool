@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import type { QueryClient } from '@tanstack/react-query'
 import { listResource } from '@/api/resources'
 
 interface CustomerPickerProps {
@@ -11,10 +12,35 @@ interface CustomerPickerProps {
   className?: string
 }
 
-interface CustomerRow {
+export interface CustomerRow {
   customer_code: number
   customer_name: string | null
   entity_code: string | null
+}
+
+/** react-query key shared by the picker, the filter dropdown, and the
+ *  ResourceTable cell-name lookup. */
+export const CUSTOMER_PICKER_QUERY_KEY = ['customer-picker'] as const
+
+/**
+ * Sync lookup of a customer's display name from the shared customer
+ * cache. Used by ResourceTable cells to render the customer_name in
+ * place of the bare customer_code integer on tabs where the cell is
+ * read-only (Discharge / Claim).
+ *
+ * Returns null if:
+ *   - the cache hasn't loaded yet (caller should fall back to the code)
+ *   - the customer_code isn't present in the cache (rare; could happen
+ *     if a row references a customer that no longer exists)
+ */
+export function lookupCustomerName(
+  qc: QueryClient,
+  customer_code: number | null | undefined,
+): string | null {
+  if (customer_code === null || customer_code === undefined) return null
+  const data = qc.getQueryData<{ rows: CustomerRow[] }>(CUSTOMER_PICKER_QUERY_KEY)
+  const row = data?.rows.find((r) => r.customer_code === customer_code)
+  return row?.customer_name ?? null
 }
 
 /**
@@ -32,7 +58,7 @@ export function CustomerPicker({
   // We fetch up to 500 customers — adequate for this deployment's scale.
   // Upgrade to a searchable combobox if the list outgrows that someday.
   const q = useQuery({
-    queryKey: ['customer-picker'],
+    queryKey: CUSTOMER_PICKER_QUERY_KEY,
     queryFn: () =>
       listResource<CustomerRow>('customers', {
         page: 1,

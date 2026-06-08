@@ -103,6 +103,15 @@ export function hasAnyDischargeFeature(r: DbDatabaseRow): boolean {
   )
 }
 
+/**
+ * Inverse of hasAnyDischargeFeature: true if a database has NONE of the
+ * four discharge features. These are the claims-only databases the
+ * Create Claim modal lists.
+ */
+export function hasNoDischargeFeature(r: DbDatabaseRow): boolean {
+  return !hasAnyDischargeFeature(r)
+}
+
 interface DatabasePickerProps {
   value: string | null
   onChange: (v: string | null) => void
@@ -123,6 +132,19 @@ interface DatabasePickerProps {
    * dataset, so offering it would only let the agent create a dead row.
    */
   requireDischargeFeatures?: boolean
+  /**
+   * When true, only databases with NONE of the four discharge features
+   * are listed (the claims-only databases). Used by the Create Claim
+   * modal. Mutually exclusive with requireDischargeFeatures.
+   */
+  requireNoDischargeFeatures?: boolean
+  /**
+   * When true, the placeholder option is selectable and labeled "All".
+   * Used by filter rows where clearing the selection should clear the
+   * filter. In create/edit contexts the placeholder stays disabled so
+   * the agent has to actively pick something.
+   */
+  allowAll?: boolean
 }
 
 export function DatabasePicker({
@@ -133,6 +155,8 @@ export function DatabasePicker({
   className,
   preserveUnknownValue,
   requireDischargeFeatures,
+  requireNoDischargeFeatures,
+  allowAll,
 }: DatabasePickerProps) {
   const q = useQuery({
     queryKey: ['db-database-picker'],
@@ -143,7 +167,9 @@ export function DatabasePicker({
   const allRows = q.data?.rows ?? []
   const rows = requireDischargeFeatures
     ? allRows.filter(hasAnyDischargeFeature)
-    : allRows
+    : requireNoDischargeFeatures
+      ? allRows.filter(hasNoDischargeFeature)
+      : allRows
   const knownNames = new Set(rows.map((r) => r.database_name))
   const showLegacyValue =
     preserveUnknownValue && value != null && value !== '' && !knownNames.has(value)
@@ -158,8 +184,8 @@ export function DatabasePicker({
         onChange(e.target.value === '' ? null : e.target.value)
       }
     >
-      <option value="" disabled>
-        {q.isLoading ? 'Loading…' : '— choose —'}
+      <option value="" disabled={!allowAll}>
+        {q.isLoading ? 'Loading…' : allowAll ? 'All' : '— choose —'}
       </option>
       {showLegacyValue && (
         <option value={value as string}>

@@ -22,6 +22,7 @@ import type { ColumnDef, FilterKind } from './resourceConfigs'
 import { effectiveFilterKind } from './resourceConfigs'
 import type { ResourceFilter } from '@/api/resources'
 import { CustomerPicker } from './CustomerPicker'
+import { DatabasePicker } from './DatabasePicker'
 
 interface ColumnFilterInputProps {
   column: ColumnDef
@@ -58,6 +59,8 @@ export function ColumnFilterInput({
       return <DateRangeFilter column={column} value={value} onChange={onChange} />
     case 'customer_code':
       return <CustomerCodeFilter column={column} value={value} onChange={onChange} />
+    case 'database_picker':
+      return <DatabasePickerFilter column={column} value={value} onChange={onChange} />
   }
   // Exhaustive check.
   return assertNever(kind)
@@ -342,6 +345,49 @@ function CustomerCodeFilter({
       className="input py-0.5 px-1 text-xs w-full"
       onChange={(v) => {
         if (v === null) onChange([])
+        else onChange([{ column: column.key, operator: 'eq', value: v }])
+      }}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Database picker — dropdown sourced from myuser.db_database
+//
+// Honors the column's pickerRequire* flags so each tab's filter shows the
+// same options as the cell/create picker (discharge tab: discharge-capable
+// databases; claim tab: claims-only databases).
+//
+// Emits an `eq` filter on the column's stored value (database_name string).
+// ---------------------------------------------------------------------------
+
+function DatabasePickerFilter({
+  column,
+  value,
+  onChange,
+}: {
+  column: ColumnDef
+  value: ResourceFilter[]
+  onChange: (next: ResourceFilter[]) => void
+}) {
+  const current = useMemo(() => {
+    const f = value.find((v) => v.operator === 'eq')
+    return f && typeof f.value === 'string' ? f.value : null
+  }, [value])
+
+  return (
+    <DatabasePicker
+      value={current}
+      className="input py-0.5 px-1 text-xs w-full"
+      allowAll
+      // The cell picker uses preserveUnknownValue so legacy values stay
+      // visible; the filter doesn't need that — if someone applies a
+      // filter for a value that no longer exists in db_database, leaving
+      // the empty placeholder selected after clearing is fine.
+      requireDischargeFeatures={column.pickerRequireDischargeFeatures}
+      requireNoDischargeFeatures={column.pickerRequireNoDischargeFeatures}
+      onChange={(v) => {
+        if (v === null || v === '') onChange([])
         else onChange([{ column: column.key, operator: 'eq', value: v }])
       }}
     />

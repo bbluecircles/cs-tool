@@ -31,6 +31,8 @@
  * fields are baked into the repo's INSERT statements.
  */
 
+import { US_STATE_OPTIONS } from './usStates'
+
 export type ColumnKind =
   | 'text'       // free-form string
   | 'int'        // whole number
@@ -52,6 +54,7 @@ export type FilterKind =
   | 'enum'
   | 'date'
   | 'customer_code'
+  | 'database_picker'
 
 export interface ColumnDef {
   key: string
@@ -112,6 +115,12 @@ export interface ColumnDef {
    * agents can't pick a database that can't back a discharge dataset.
    */
   pickerRequireDischargeFeatures?: boolean
+  /**
+   * For database_picker columns: when true, the dropdown only lists
+   * databases with NONE of the four discharge features (claims-only
+   * databases). Used on the Claim Databases create form.
+   */
+  pickerRequireNoDischargeFeatures?: boolean
 }
 
 export interface ResourceConfig {
@@ -156,7 +165,7 @@ export function effectiveFilterKind(col: ColumnDef): FilterKind | null {
     case 'flag':         return 'flag'
     case 'datetime':     return 'date'
     case 'customer_code': return 'customer_code'
-    case 'database_picker': return 'text'  // substring filter on database_name
+    case 'database_picker': return 'database_picker'  // dropdown sourced from db_database
     case 'readonly':     return null
   }
 }
@@ -253,6 +262,8 @@ export const customersConfig: ResourceConfig = {
     {
       key: 'state', label: 'State', kind: 'text', editable: true,
       maxLength: 2, showInCreate: true,
+      // All US states + DC. Optional, so a blank choice leads the list.
+      options: [{ value: '', label: '— none —' }, ...US_STATE_OPTIONS],
     },
     {
       key: 'customer_desc', label: 'Description', kind: 'text', editable: true,
@@ -403,6 +414,10 @@ export const customerDatasetsConfig: ResourceConfig = {
     {
       key: 'odbc_dataset', label: 'ODBC Dataset', kind: 'text', editable: true,
       maxLength: 50, showInCreate: true,
+      // Filter dropdown: same source/filter as the Database column.
+      // The cell + create input stay as plain text.
+      filterKind: 'database_picker',
+      pickerRequireDischargeFeatures: true,
     },
     {
       // Driven by myuser.db_database via /api/db-databases (DatabasePicker).
@@ -491,8 +506,12 @@ export const ppiDatasetsConfig: ResourceConfig = {
       editable: false, showInCreate: true, requiredOnCreate: true,
     },
     {
-      key: 'ppi_state', label: 'State', kind: 'text', editable: true,
+      // Claims-only database, picked from myuser.db_database (filtered to
+      // databases with NONE of the discharge features). The selected
+      // database_name string is stored directly into ppi_state.
+      key: 'ppi_state', label: 'State', kind: 'database_picker', editable: true,
       maxLength: 25, showInCreate: true, requiredOnCreate: true,
+      pickerRequireNoDischargeFeatures: true,
     },
     {
       key: 'ppi_detail', label: 'Detail', kind: 'flag', editable: true,

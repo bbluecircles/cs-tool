@@ -8,6 +8,7 @@
 import { KeyboardEvent, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import type { ColumnDef } from './resourceConfigs'
+import { DatabasePicker } from './DatabasePicker'
 
 interface EditableCellProps {
   column: ColumnDef
@@ -79,6 +80,17 @@ function EditingInput({
   onCommit: (v: unknown) => void
   onCancel: () => void
 }) {
+  // Database picker (myuser.db_database list).
+  if (column.kind === 'database_picker') {
+    return (
+      <DatabasePickerInput
+        column={column}
+        initial={initial}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+    )
+  }
   // Select-like inputs: either flag (0/1) or any column with options.
   if (column.options && column.options.length > 0) {
     return (
@@ -98,6 +110,51 @@ function EditingInput({
       onCommit={onCommit}
       onCancel={onCancel}
     />
+  )
+}
+
+function DatabasePickerInput({
+  column,
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  column: ColumnDef
+  initial: unknown
+  onCommit: (v: unknown) => void
+  onCancel: () => void
+}) {
+  // The original committed value sits unchanged in state until the
+  // agent picks a different one. preserveUnknownValue keeps a legacy
+  // database_name visible in the dropdown even if it isn't in the
+  // current db_database list — without it the cell would visually
+  // "blank" the moment editing opens.
+  const [value, setValue] = useState<string | null>(
+    typeof initial === 'string' && initial !== '' ? initial : null,
+  )
+  return (
+    <div
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          onCancel()
+        }
+      }}
+    >
+      <DatabasePicker
+        value={value}
+        onChange={(v) => {
+          setValue(v)
+          // Commit immediately on change — matches the select-blur feel of
+          // SelectInput. Escape still cancels if the agent opened by mistake.
+          onCommit(v)
+        }}
+        preserveUnknownValue
+        requireDischargeFeatures={column.pickerRequireDischargeFeatures}
+        requireNoDischargeFeatures={column.pickerRequireNoDischargeFeatures}
+        className="input py-0.5 px-1 text-xs w-auto"
+      />
+    </div>
   )
 }
 

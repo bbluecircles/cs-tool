@@ -24,11 +24,16 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import type { ResourceFilter } from '@/api/resources'
-import { fetchDbDatabases } from '@/api/resources'
+import { fetchDbDatabases, listResource } from '@/api/resources'
 import type { ResourceConfig } from './resourceConfigs'
 import { ColumnFilterInput } from './ColumnFilterInput'
 import { EditableCell } from './EditableCell'
 import { lookupDbFeatures } from './DatabasePicker'
+import {
+  CUSTOMER_PICKER_QUERY_KEY,
+  lookupCustomerName,
+  type CustomerRow,
+} from './CustomerPicker'
 import { PasswordCell } from './PasswordCell'
 import type { UseDirtyRows } from './useDirtyRows'
 
@@ -92,6 +97,30 @@ export function ResourceTable({
     enabled: hasFeatureGatedColumns,
   })
 
+  // Same trick for the customer-picker cache: when a read-only customer_code
+  // column is present, subscribe to the cache so the table re-renders once
+  // the customer list resolves and we can substitute the name for the code.
+  // The CustomerPicker in the filter row also subscribes — we share the
+  // cache via the CUSTOMER_PICKER_QUERY_KEY constant.
+  const hasReadonlyCustomerCode = useMemo(
+    () => visibleConfigCols.some(
+      (c) => c.kind === 'customer_code' && !c.editable,
+    ),
+    [visibleConfigCols],
+  )
+  const customerPickerQuery = useQuery({
+    queryKey: CUSTOMER_PICKER_QUERY_KEY,
+    queryFn: () =>
+      listResource<CustomerRow>('customers', {
+        page: 1,
+        page_size: 200,
+        sort_by: 'customer_name',
+        sort_dir: 'asc',
+      }),
+    staleTime: 60_000,
+    enabled: hasReadonlyCustomerCode,
+  })
+
   const columns = useMemo<ColumnDef<Row>[]>(() => {
     const tableCols: ColumnDef<Row>[] = visibleConfigCols.map((col) => {
       if (col.isPassword) {
@@ -142,6 +171,21 @@ export function ResourceTable({
           const isSaving = savingRowKey === key
 
           if (!col.editable) {
+            // customer_code cells: resolve the bare integer to the
+            // customer_name via the shared CustomerPicker cache. Falls
+            // back to the code itself if the cache hasn't loaded yet.
+            if (col.kind === 'customer_code') {
+              const code = rowObj[col.key]
+              const codeNum = typeof code === 'number' ? code : Number(code)
+              if (Number.isFinite(codeNum)) {
+                const name = lookupCustomerName(qc, codeNum)
+                return (
+                  <span className="text-gray-700">
+                    {name ?? String(codeNum)}
+                  </span>
+                )
+              }
+            }
             return (
               <span className="text-gray-700">
                 {formatReadonly(col.kind, rowObj[col.key])}
@@ -242,7 +286,7 @@ export function ResourceTable({
     return tableCols
   }, [
     visibleConfigCols, config, dirty, onDeleteRow, onDiscardRow, onSaveRow,
-    savingRowKey, qc, dbFeaturesQuery.data,
+    savingRowKey, qc, dbFeaturesQuery.data, customerPickerQuery.data,
   ])
 
   const table = useReactTable({

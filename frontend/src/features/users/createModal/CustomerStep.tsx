@@ -17,6 +17,7 @@ import type {
   NewCustomerInput,
 } from '@/api/create_user'
 import { Field, NumberField, SectionHeader, TextField } from './formFields'
+import { US_STATE_OPTIONS } from '../../resources/usStates'
 
 export type CustomerStepValue =
   | { mode: 'existing'; customer_code: number | null }
@@ -138,13 +139,19 @@ export function CustomerStep({
               max={32767}
             />
           </Field>
-          <Field label="State" hint="Two-letter state code (e.g. AZ)">
-            <TextField
+          <Field label="State">
+            <select
+              className={clsx('input', errors.state && 'input-error')}
               value={value.state}
-              onChange={(v) => onChange({ ...value, state: v })}
-              maxLength={2}
-              invalid={!!errors.state}
-            />
+              onChange={(e) => onChange({ ...value, state: e.target.value })}
+            >
+              <option value="">— none —</option>
+              {US_STATE_OPTIONS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
           </Field>
           <Field label="Description">
             <TextField
