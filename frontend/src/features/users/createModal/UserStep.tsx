@@ -195,11 +195,6 @@ export function UserStep({
             onChange={(b) => onChange({ ...value, webuser: b ? 1 : 0 })}
           />
           <Toggle
-            label="PPI user"
-            checked={value.ppiuser === 1}
-            onChange={(b) => onChange({ ...value, ppiuser: b ? 1 : 0 })}
-          />
-          <Toggle
             label="ESRI access"
             checked={value.esri_access === 1}
             onChange={(b) => onChange({ ...value, esri_access: b ? 1 : 0 })}
@@ -337,7 +332,9 @@ export function defaultUserStepValue(): UserStepValue {
   return {
     user_id: '',
     user_password: '',
-    pw_flag: 0,
+    // Pw Prefix is no longer surfaced in the UI; new users always get
+    // pw_flag = 1 (Yes).
+    pw_flag: 1,
     e_mail: '',
     first_name: '',
     last_name: '',

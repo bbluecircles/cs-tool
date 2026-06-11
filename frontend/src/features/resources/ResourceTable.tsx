@@ -23,6 +23,12 @@ import {
 } from '@tanstack/react-table'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
+
+// DEPLOYMENT MARKER — if you see this log in DevTools console when the
+// app loads, v20 (no sort removal) is running. Two-state cycle: clicking
+// a header toggles asc <-> desc; the third "clear sort" step is disabled.
+// eslint-disable-next-line no-console
+console.log('[ResourceTable] v20 loaded — two-state sort (asc/desc only)')
 import type { ResourceFilter } from '@/api/resources'
 import { fetchDbDatabases, listResource } from '@/api/resources'
 import type { ResourceConfig } from './resourceConfigs'
@@ -123,11 +129,19 @@ export function ResourceTable({
 
   const columns = useMemo<ColumnDef<Row>[]>(() => {
     const tableCols: ColumnDef<Row>[] = visibleConfigCols.map((col) => {
+      // Sortable by default. The previous logic gated this on a frontend
+      // allowlist (config.sortableColumns) that had to mirror the backend
+      // repo's SORTABLE_COLUMNS — easy to drift out of sync. The backend
+      // already silently falls back to a default order if asked to sort
+      // by an unknown column, so giving every visible column a sort
+      // affordance is safe.
+      const enableSorting = true
       if (col.isPassword) {
         return {
           id: col.key,
+          accessorKey: col.key,
           header: col.label,
-          enableSorting: config.sortableColumns.has(col.key),
+          enableSorting,
           cell: ({ row }) => {
             const rowObj = row.original as Row
             const key = config.rowKey(rowObj)
@@ -161,8 +175,9 @@ export function ResourceTable({
 
       return {
         id: col.key,
+        accessorKey: col.key,
         header: col.label,
-        enableSorting: config.sortableColumns.has(col.key),
+        enableSorting,
         cell: ({ row }) => {
           const rowObj = row.original as Row
           const key = config.rowKey(rowObj)
@@ -300,6 +315,11 @@ export function ResourceTable({
     manualSorting: true,
     manualPagination: true,
     manualFiltering: true,
+    // Two-state cycle (asc <-> desc) per column instead of the default
+    // three-state (asc -> desc -> idle). The "idle" step would clear
+    // sort entirely and reorder rows back to the backend's default,
+    // which agents read as "ascending again" — confusing.
+    enableSortingRemoval: false,
     getCoreRowModel: getCoreRowModel(),
   })
 
@@ -346,8 +366,19 @@ export function ResourceTable({
                         canSort && 'cursor-pointer select-none hover:bg-primary-100',
                       )}
                       onClick={canSort ? h.column.getToggleSortingHandler() : undefined}
+                      title={
+                        canSort
+                          ? sort === 'asc'
+                            ? 'Sorted ascending — click for descending'
+                            : sort === 'desc'
+                              ? 'Sorted descending — click for ascending'
+                              : 'Click to sort ascending'
+                          : undefined
+                      }
                     >
-                      <span className="inline-flex items-center gap-1">
+                      <span
+                        className="inline-flex items-center gap-1 pointer-events-none"
+                      >
                         {flexRender(h.column.columnDef.header, h.getContext())}
                         {canSort && (
                           <SortIndicator sort={sort === false ? null : sort} />
@@ -433,9 +464,18 @@ export function ResourceTable({
 }
 
 function SortIndicator({ sort }: { sort: 'asc' | 'desc' | null }) {
+  // Always render an indicator when the column is sortable. The idle
+  // state (no active sort) shows a dim ↕ glyph so agents see the
+  // column is sortable without having to hover.
   return (
-    <span className="inline-block w-3 text-center text-[10px] text-gray-500">
-      {sort === 'asc' ? '▲' : sort === 'desc' ? '▼' : ''}
+    <span className="inline-block w-3 text-center text-[10px]">
+      {sort === 'asc' ? (
+        <span className="text-secondary-700">▲</span>
+      ) : sort === 'desc' ? (
+        <span className="text-secondary-700">▼</span>
+      ) : (
+        <span className="text-gray-300">↕</span>
+      )}
     </span>
   )
 }

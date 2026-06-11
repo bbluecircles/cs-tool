@@ -196,13 +196,18 @@ function flag(
   }
 }
 
-function readonly(key: string, label: string): ColumnDef {
+function readonly(
+  key: string,
+  label: string,
+  opts: Partial<ColumnDef> = {},
+): ColumnDef {
   return {
     key,
     label,
     kind: 'readonly',
     editable: false,
     filterable: false,
+    ...opts,
   }
 }
 
@@ -308,9 +313,9 @@ export const customerUsersConfig: ResourceConfig = {
   primaryKeyColumns: ['user_id', 'customer_code'],
   sortableColumns: new Set([
     'user_id', 'customer_code', 'e_mail', 'disable',
-    'first_name', 'last_name', 'pw_flag',
+    'first_name', 'last_name',
     'esri_access', 'esri_tap_access', 'esri_state',
-    'webuser', 'ppiuser', 'ppi_detail_user',
+    'webuser', 'ppi_detail_user',
     'web_esri_access', 'web_esri_tap_access',
     'web_inpatient_access', 'web_outpatient_access',
     'web_ed_access', 'web_claims_access',
@@ -335,7 +340,16 @@ export const customerUsersConfig: ResourceConfig = {
       showInCreate: true, requiredOnCreate: true,
       filterable: false,
     },
-    flag('pw_flag', 'Pw Prefix', { createDefault: 0 }),
+    // Pw Prefix: hidden everywhere per UX spec. Always created as 1
+    // (Yes). Hidden from the create form via showInCreate: false; the
+    // createDefault still flows through CreateRowModal's seed values
+    // and is what gets sent. (For the multi-step UserStep wizard, the
+    // initial value in UserStep.tsx is set to 1 to match.)
+    flag('pw_flag', 'Pw Prefix', {
+      createDefault: 1,
+      showInCreate: false,
+      show: false,
+    }),
     {
       key: 'e_mail', label: 'Email', kind: 'text', editable: true,
       maxLength: 200, showInCreate: true, requiredOnCreate: true,
@@ -350,7 +364,9 @@ export const customerUsersConfig: ResourceConfig = {
     },
     flag('disable', 'Disabled', { createDefault: 0 }),
     flag('webuser', 'Web', { createDefault: 1 }),
-    flag('ppiuser', 'PPI'),
+    // PPI: hidden everywhere per UX spec. Defaults to 0 (No). The
+    // create flow doesn't surface it.
+    flag('ppiuser', 'PPI', { showInCreate: false, show: false }),
     flag('esri_access', 'ESRI'),
     flag('esri_tap_access', 'ESRI TAP'),
     flag('ppi_detail_user', 'PPI Detail'),
@@ -397,27 +413,26 @@ export const customerDatasetsConfig: ResourceConfig = {
   rowKey: (r) => `cd-${r.rec_id}`,
   primaryKeyColumns: ['rec_id'],
   sortableColumns: new Set([
-    'rec_id', 'customer_code', 'database_name', 'odbc_dataset',
+    'rec_id', 'customer_code', 'database_name',
     'inpatient', 'outpatient', 'ed',
-    'dataset_type', 'aprdrg_flag',
+    'aprdrg_flag',
     'create_date', 'modify_date',
   ]),
   filterByCustomerCode: true,
   allowDelete: true,
   deleteImpactKind: 'customer_dataset',
   columns: [
-    readonly('rec_id', 'Rec ID'),
+    readonly('rec_id', 'Rec ID', { show: false }),
     {
       key: 'customer_code', label: 'Customer', kind: 'customer_code',
       editable: false, showInCreate: true, requiredOnCreate: true,
     },
     {
+      // Hidden from the table per UX spec. Still settable on create
+      // (showInCreate: true) and inline-editable if it ever comes back.
       key: 'odbc_dataset', label: 'ODBC Dataset', kind: 'text', editable: true,
       maxLength: 50, showInCreate: true,
-      // Filter dropdown: same source/filter as the Database column.
-      // The cell + create input stay as plain text.
-      filterKind: 'database_picker',
-      pickerRequireDischargeFeatures: true,
+      show: false,
     },
     {
       // Driven by myuser.db_database via /api/db-databases (DatabasePicker).
@@ -428,12 +443,12 @@ export const customerDatasetsConfig: ResourceConfig = {
       pickerRequireDischargeFeatures: true,
     },
     {
-      // View-only on the table; not shown on create. The backend defaults
-      // this to 'd' (discharge) when omitted — see customer_dataset_repo.
-      // PPI/claims datasets go through a different table entirely and
-      // never use this dataset_type.
+      // Always 'd' for this resource. Hidden from the table AND the
+      // create form. The backend defaults to 'd' when omitted — see
+      // customer_dataset_repo.
       key: 'dataset_type', label: 'Type', kind: 'text', editable: false,
       options: datasetTypeOptions, showInCreate: false, createDefault: 'd',
+      show: false,
     },
     // IP/OP/ED/APR-DRG: locked to No unless the picked database supports
     // the feature in myuser.db_features_list. computeDisabledOverride is
@@ -500,7 +515,7 @@ export const ppiDatasetsConfig: ResourceConfig = {
   // delete-impact preview to fetch.
   deleteImpactKind: 'none',
   columns: [
-    readonly('rec_id', 'Rec ID'),
+    readonly('rec_id', 'Rec ID', { show: false }),
     {
       key: 'customer_code', label: 'Customer', kind: 'customer_code',
       editable: false, showInCreate: true, requiredOnCreate: true,
