@@ -428,10 +428,13 @@ export const customerDatasetsConfig: ResourceConfig = {
       editable: false, showInCreate: true, requiredOnCreate: true,
     },
     {
-      // Hidden from the table per UX spec. Still settable on create
-      // (showInCreate: true) and inline-editable if it ever comes back.
+      // Hidden from the table AND the create form per UX spec. The
+      // backend defaults odbc_dataset to whatever database_name is set
+      // to (see customer_dataset_repo.create_customer_dataset), so the
+      // agent doesn't need to think about it on create. Inline-edit
+      // could still expose it later if needed.
       key: 'odbc_dataset', label: 'ODBC Dataset', kind: 'text', editable: true,
-      maxLength: 50, showInCreate: true,
+      maxLength: 50, showInCreate: false,
       show: false,
     },
     {

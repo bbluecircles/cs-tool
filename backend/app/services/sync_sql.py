@@ -52,32 +52,6 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
     JOIN secure.customer_users cu    ON c.customer_code = cu.customer_code
     JOIN secure.customer_dataset cd  ON c.customer_code = cd.customer_code
     WHERE cu.`disable` = 0
-    UNION ALL
-    SELECT
-        cu.user_id, cu.e_mail, cu.`disable`,
-        c.customer_name, c.customer_code,
-        pd.ppi_state AS database_name,
-        '0' AS sg2, '0' AS sg2_op,
-        '0' AS inpatient, '0' AS outpatient, '0' AS ed,
-        cu.logging_flag, '0' AS claritas_flag, 'AZ' AS claritas_state,
-        cu.first_name, cu.last_name, c.entity_code,
-        '0' AS prism_flag, '1' AS projection_flag, c.max_bytes,
-        cu.user_password, cu.esri_access, cu.esri_tap_access, cu.esri_state,
-        cu.webuser, cu.ppiuser, cu.mapping, cu.user_priority,
-        cu.max_birt_processes,
-        'AL,AK,AZ,AR,CA,CO,CT,DC,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY' AS cms_states,
-        cu.ppi_detail_user,
-        c.`5_digit_zip`, c.max_row_cnt,
-        '0' AS transfers_flag, 'c' AS dataset_type,
-        cu.create_date, cu.modify_date, cu.pw_flag,
-        pd.cell_size_limit, pd.export_detail,
-        cu.web_esri_access, cu.web_esri_tap_access,
-        cu.web_inpatient_access, cu.web_outpatient_access,
-        cu.web_ed_access, cu.web_claims_access
-    FROM   secure.customer c
-    JOIN   secure.customer_users cu  ON c.customer_code = cu.customer_code
-    INNER JOIN secure.ppi_dataset pd ON c.customer_code = pd.customer_code
-    WHERE  cu.`disable` = 0
     """,
     # --- secure.user_details_internal_2023 ---
     "TRUNCATE TABLE secure.user_details_internal_2023",
@@ -104,35 +78,6 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
     JOIN secure.customer_users cu    ON c.customer_code = cu.customer_code
     JOIN secure.customer_dataset cd  ON c.customer_code = cd.customer_code
     WHERE cu.`disable` = 0
-    UNION ALL
-    SELECT
-        cu.user_id, cu.e_mail, cu.`disable`,
-        c.customer_name, c.customer_code,
-        pd.ppi_state AS database_name,
-        '0' AS sg2, '0' AS sg2_op,
-        '0' AS inpatient, '0' AS outpatient, '0' AS ed,
-        cu.logging_flag, '0' AS claritas_flag,
-        'AL,AK,AZ,AR,CA,CO,CT,DC,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY' AS claritas_state,
-        cu.first_name, cu.last_name, c.entity_code,
-        '0' AS prism_flag, '1' AS projection_flag, c.max_bytes,
-        cu.user_password, cu.esri_access, cu.esri_tap_access, cu.esri_state,
-        cu.webuser, cu.ppiuser, cu.mapping, cu.user_priority,
-        cu.max_birt_processes,
-        'AL,AK,AZ,AR,CA,CO,CT,DC,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY' AS cms_states,
-        cu.ppi_detail_user,
-        c.`5_digit_zip`, c.max_row_cnt,
-        '0' AS transfers_flag, 'c' AS dataset_type,
-        cu.create_date, cu.modify_date, cu.pw_flag,
-        '0' AS aprdrg_flag, '1' AS export_flag,
-        '100000000' AS export_row_limit, '1' AS webapp_flag,
-        pd.cell_size_limit, pd.export_detail,
-        cu.web_esri_access, cu.web_esri_tap_access,
-        cu.web_inpatient_access, cu.web_outpatient_access,
-        cu.web_ed_access, cu.web_claims_access
-    FROM   secure.customer c
-    JOIN   secure.customer_users cu  ON c.customer_code = cu.customer_code
-    INNER JOIN secure.ppi_dataset pd ON c.customer_code = pd.customer_code
-    WHERE  cu.`disable` = 0
     """,
     # --- secure.user_details_internal_2026 ---
     "TRUNCATE TABLE secure.user_details_internal_2026",
@@ -429,132 +374,6 @@ _GRANT_GENERATORS: tuple[str, ...] = (
     WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
     """,
 
-    # myuser per-table writes
-    #
-    # These cover the web app's working tables (saved reports, custom and
-    # combined groups, report packages, user preferences, etc.). Without
-    # them users can READ from myuser.* via the broad SELECT above, but
-    # can't save reports, build groups, or share — so the web app
-    # appears broken even though the user has webuser=1.
-    #
-    # Issued to every active user on the customer, matching the source
-    # SQL. Not gated on webuser=1.
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE ON `myuser`.execute_report TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.combined_grp_2011 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.combined_grp_run_2011 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.combined_grp_share_2011 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.custom_grp_2011 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.custom_grp_run_2011 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.custom_grp_share_2011 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.report_package_2013 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.report_package_2019 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.report_package_report_2013 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.report_package_report_2019 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.report_package_share_2013 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.report_package_share_2019 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_dberror TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_email TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_is_payor_score TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_msdrg_score TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_msdrg_specialty_score TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_report TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_report_output_2013 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_report_output_2019 TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_report_share TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `myuser`.user_st_payor_score TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-
     # State/claims DB (per-user database_name)
     """
     SELECT CONCAT('GRANT SELECT ON `', database_name, '`.* TO `', user_id, '`@`%`;')
@@ -576,31 +395,7 @@ _GRANT_GENERATORS: tuple[str, ...] = (
     WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
     """,
 
-    # user_data per-table grants (mirroring source SQL). These are
-    # functionally redundant with the broad user_data.* grant below, but
-    # included for byte-level parity with the source.
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE ON `user_data`.dynamic_reports TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE ON `user_data`.dynamic_reports_saved TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE ON `user_data`.user_settings TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `user_data`.user_share TO `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-
-    # user_data broad grant
+    # user_data
     """
     SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `user_data`.* TO `', user_id, '`@`%`;')
     FROM   myuser.user_details_2026
@@ -636,5 +431,56 @@ def grants_for_customer(conn: Connection, customer_code: int) -> int:
             log.warning("grant failed (%s): %s", stmt[:80], e)
     log.info(
         "grants_for_customer(%s): %d/%d ok", customer_code, ok, len(stmts)
+    )
+    return ok
+
+
+# ---------------------------------------------------------------------------
+# Revokes — the inverse of grants_for_customer.
+#
+# Strips all privileges from every active MariaDB user under a customer
+# but leaves the user accounts in place. Run grants on the same customer
+# afterwards puts everything back. Symmetric.
+#
+# We deliberately do NOT DROP USER here: that's destructive and not the
+# inverse of GRANT — it's the inverse of CREATE USER. If you want to
+# fully delete users that's a separate operation.
+# ---------------------------------------------------------------------------
+
+_REVOKE_GENERATOR = """
+    SELECT CONCAT('REVOKE ALL PRIVILEGES, GRANT OPTION FROM `', user_id, '`@`%`;')
+    FROM   myuser.user_details_2026
+    WHERE  `disable` = 0 AND customer_code = :cc
+    GROUP BY user_id
+"""
+
+
+def _collect_revokes(conn: Connection, customer_code: int) -> list[str]:
+    stmts: list[str] = []
+    rows = conn.execute(text(_REVOKE_GENERATOR), {"cc": customer_code}).all()
+    for row in rows:
+        stmt = row[0]
+        if stmt:
+            stmts.append(stmt)
+    return stmts
+
+
+def revokes_for_customer(conn: Connection, customer_code: int) -> int:
+    """Run REVOKE ALL PRIVILEGES for every active user under a customer.
+
+    Returns count of executed statements. Individual failures are logged
+    but don't abort the rest — REVOKE failing on a user that has no
+    privileges (e.g. never had grants run) is harmless and expected.
+    """
+    stmts = _collect_revokes(conn, customer_code)
+    ok = 0
+    for stmt in stmts:
+        try:
+            conn.execute(text(stmt))
+            ok += 1
+        except Exception as e:
+            log.warning("revoke failed (%s): %s", stmt[:80], e)
+    log.info(
+        "revokes_for_customer(%s): %d/%d ok", customer_code, ok, len(stmts)
     )
     return ok

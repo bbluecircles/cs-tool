@@ -139,6 +139,11 @@ def create_customer_dataset(conn: Connection, data: dict[str, Any]) -> int:
         {
             "customer_code": data["customer_code"],
             "database_name": data["database_name"],
+            # odbc_dataset defaults to database_name when not provided.
+            # The Create Discharge modal no longer surfaces this field
+            # (showInCreate: false in resourceConfigs), so on create the
+            # value always comes from database_name. Inline-edit can
+            # still override it after the fact.
             "odbc_dataset": data.get("odbc_dataset") or data["database_name"],
             "sg2": data.get("sg2", 0),
             "sg2_op": data.get("sg2_op", 0),

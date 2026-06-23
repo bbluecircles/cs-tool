@@ -2,6 +2,7 @@
 
   POST /api/admin/retry-refresh              run refresh_all (only if enabled)
   POST /api/admin/retry-grants/{customer}    run grants for one customer
+  POST /api/admin/retry-revokes/{customer}   REVOKE all privileges for one customer
   GET  /api/admin/audit                      recent audit log entries
 
 Under the current architecture CS agents trigger grants explicitly from
@@ -29,6 +30,7 @@ from app.services.sync_sql import (
     RefreshDisabled,
     grants_for_customer,
     refresh_all,
+    revokes_for_customer,
 )
 
 log = logging.getLogger(__name__)
@@ -198,6 +200,62 @@ def retry_grants(
         refresh_status=refresh_status,
         refresh_error=refresh_error,
     )
+
+
+@router.post(
+    "/retry-revokes/{customer_code}", response_model=RetryResponse
+)
+def retry_revokes(
+    customer_code: int,
+    request: Request,
+    agent: Annotated[CurrentAgent, Depends(require_admin)],
+) -> RetryResponse:
+    """REVOKE ALL PRIVILEGES from every active user under a customer.
+
+    The inverse of retry_grants: strips privileges but leaves the
+    MariaDB user accounts in place. After this runs, the affected users
+    can no longer access any database; calling retry_grants on the same
+    customer puts everything back.
+
+    Skips the refresh phase by design — the agent has already chosen
+    "remove access," and a stale view of who counts as active is fine
+    for that purpose. (Adding a refresh would just slow things down
+    without changing the outcome materially.)
+    """
+    if customer_code < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="customer_code must be non-negative",
+        )
+
+    try:
+        with get_raw_connection() as conn:
+            count = revokes_for_customer(conn, customer_code)
+    except Exception as e:
+        log.exception("retry-revokes failed")
+        with get_connection() as conn:
+            audit.record(
+                conn,
+                user_id=agent.user_id,
+                action="admin.retry_revokes.failed",
+                entity_type="sync",
+                entity_key=str(customer_code),
+                notes=str(e),
+                ip=_client_ip(request),
+            )
+        return RetryResponse(ok=False, error=str(e))
+
+    with get_connection() as conn:
+        audit.record(
+            conn,
+            user_id=agent.user_id,
+            action="admin.retry_revokes",
+            entity_type="sync",
+            entity_key=str(customer_code),
+            notes=f"{count} statements applied",
+            ip=_client_ip(request),
+        )
+    return RetryResponse(ok=True, statement_count=count)
 
 
 class AuditEntry(BaseModel):

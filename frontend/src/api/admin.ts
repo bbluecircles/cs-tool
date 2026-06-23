@@ -28,6 +28,10 @@ export function retryGrants(customerCode: number): Promise<RetryResponse> {
   return api.post<RetryResponse>(`/api/admin/retry-grants/${customerCode}`)
 }
 
+export function retryRevokes(customerCode: number): Promise<RetryResponse> {
+  return api.post<RetryResponse>(`/api/admin/retry-revokes/${customerCode}`)
+}
+
 export interface AuditEntry {
   id: number
   user_id: string | null

@@ -4,10 +4,9 @@ import clsx from 'clsx'
 import {
   listAudit,
   retryGrants,
-  retryRefresh,
+  retryRevokes,
   type RetryResponse,
 } from '@/api/admin'
-import { useConfig } from '@/api/config'
 import { CustomerPicker } from '@/features/resources/CustomerPicker'
 
 export function AdminPage() {
@@ -20,25 +19,36 @@ export function AdminPage() {
 }
 
 function SyncCard() {
-  const cfg = useConfig()
-  const refreshEnabled = cfg.data?.enable_view_refresh ?? false
-
   const [customerCode, setCustomerCode] = useState<number | null>(null)
   const [lastResult, setLastResult] = useState<{
     label: string
     result: RetryResponse
   } | null>(null)
+  // Two-step confirm for Remove grants. Clicking once arms the button;
+  // clicking again within the same render commits. Resets on customer
+  // change or after the mutation completes.
+  const [revokeArmed, setRevokeArmed] = useState(false)
 
-  const refresh = useMutation({
-    mutationFn: () => retryRefresh(),
-    onSuccess: (r) => setLastResult({ label: 'Refresh', result: r }),
-  })
   const grants = useMutation({
     mutationFn: (code: number) => retryGrants(code),
     onSuccess: (r) => setLastResult({ label: 'Grants', result: r }),
   })
+  const revokes = useMutation({
+    mutationFn: (code: number) => retryRevokes(code),
+    onSuccess: (r) => {
+      setLastResult({ label: 'Revokes', result: r })
+      setRevokeArmed(false)
+    },
+    onError: () => setRevokeArmed(false),
+  })
 
-  const canRunGrants = customerCode !== null
+  const canAct = customerCode !== null
+  // Disarm revoke if the agent switches customers — the confirmation
+  // should only apply to the customer that was visible when armed.
+  function handleCustomerChange(v: number | null) {
+    setCustomerCode(v)
+    setRevokeArmed(false)
+  }
 
   return (
     <div className="card p-5 space-y-4">
@@ -46,8 +56,19 @@ function SyncCard() {
         <h2 className="text-base font-semibold text-gray-900">Sync actions</h2>
       </div>
 
+      {/* Shared customer picker — both action cards below operate on
+          whichever customer is selected here. */}
+      <div className="space-y-1">
+        <label className="label">Customer</label>
+        <CustomerPicker
+          value={customerCode}
+          onChange={handleCustomerChange}
+          allowAll={false}
+        />
+      </div>
+
       <div className="grid grid-cols-2 gap-4">
-        {/* Grants card — this is the primary admin action. */}
+        {/* Grants card — the primary admin action. */}
         <div className="rounded-md border border-secondary-500/30 bg-secondary-100/30 p-3">
           <div className="flex items-center gap-2">
             <span className="inline-block h-2 w-2 rounded-full bg-secondary-500" />
@@ -61,55 +82,62 @@ function SyncCard() {
             the chosen customer. Run this after creating a user, changing
             a password, or editing the database_name of a dataset.
           </div>
-          <div className="mt-3 space-y-2">
-            <CustomerPicker
-              value={customerCode}
-              onChange={setCustomerCode}
-              allowAll={false}
-            />
+          <div className="mt-3">
             <button
               type="button"
               className="btn-primary w-full"
               onClick={() =>
                 customerCode !== null && grants.mutate(customerCode)
               }
-              disabled={!canRunGrants || grants.isPending}
+              disabled={!canAct || grants.isPending || revokes.isPending}
             >
               {grants.isPending ? 'Running…' : 'Run grants'}
             </button>
           </div>
         </div>
 
-        {/* Refresh card — disabled by default via config flag. */}
-        <div
-          className={clsx(
-            'rounded-md border p-3',
-            refreshEnabled
-              ? 'border-border'
-              : 'border-border bg-gray-100/50 opacity-75',
-          )}
-        >
-          <div className="text-sm font-medium text-gray-900">
-            Refresh user_details views
+        {/* Remove grants card — inverse of Run grants. Destructive: REVOKEs
+            all privileges for every active user under the customer. The
+            user accounts themselves stay; Run grants on the same customer
+            puts everything back. Two-click confirm to prevent fat-fingers. */}
+        <div className="rounded-md border border-error-600/30 bg-error-100/30 p-3">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full bg-error-600" />
+            <div className="text-sm font-medium text-gray-900">
+              Remove grants for a customer
+            </div>
           </div>
           <div className="mt-1 text-[11px] text-gray-500">
-            {refreshEnabled
-              ? 'Rebuilds user_details* in secure, myuser, and imic_control from the canonical tables.'
-              : 'Disabled by config (ENABLE_VIEW_REFRESH=false). An external process handles the refresh on the current deployment.'}
+            Executes REVOKE ALL PRIVILEGES for every active user of the
+            chosen customer. User accounts stay in place but
+            lose all database access until Run grants is executed again.
           </div>
-          <button
-            type="button"
-            className="btn-ghost mt-3"
-            onClick={() => refresh.mutate()}
-            disabled={refresh.isPending || !refreshEnabled}
-            title={
-              !refreshEnabled
-                ? 'Enabled via ENABLE_VIEW_REFRESH=true in backend .env'
-                : undefined
-            }
-          >
-            {refresh.isPending ? 'Running…' : 'Run refresh'}
-          </button>
+          <div className="mt-3">
+            <button
+              type="button"
+              className={clsx(
+                'w-full rounded-md px-3 py-1.5 text-sm font-medium',
+                revokeArmed
+                  ? 'bg-error-600 text-white hover:bg-error-600/90'
+                  : 'border border-error-600/40 text-error-600 hover:bg-error-100',
+              )}
+              onClick={() => {
+                if (customerCode === null) return
+                if (!revokeArmed) {
+                  setRevokeArmed(true)
+                  return
+                }
+                revokes.mutate(customerCode)
+              }}
+              disabled={!canAct || revokes.isPending || grants.isPending}
+            >
+              {revokes.isPending
+                ? 'Running…'
+                : revokeArmed
+                  ? 'Click again to confirm'
+                  : 'Remove grants'}
+            </button>
+          </div>
         </div>
       </div>
 
