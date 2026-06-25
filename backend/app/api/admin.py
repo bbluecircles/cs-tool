@@ -202,8 +202,8 @@ def retry_revokes(
     agent: Annotated[CurrentAgent, Depends(require_admin)],
 ) -> RetryResponse:
     """Remove access for every active user under a customer: REVOKE ALL
-    PRIVILEGES, DROP USER, and delete the customer's rows from every
-    user_details* lookup table.
+    PRIVILEGES, DROP USER, and delete the customer's rows from the three
+    secure.user_details_internal* tables.
 
     The exact inverse of retry_grants. Re-running retry_grants on the same
     customer puts everything back: its refresh phase repopulates the lookup

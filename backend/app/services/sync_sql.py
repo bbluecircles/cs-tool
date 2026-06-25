@@ -254,52 +254,6 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         s.web_ed_access, s.web_claims_access
     FROM secure.user_details_internal_2026 s
     """,
-    # --- imic_control.user_details ---
-    "TRUNCATE TABLE imic_control.user_details",
-    """
-    INSERT IGNORE INTO imic_control.user_details
-    SELECT
-        s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
-        s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
-        s.logging_flag, s.claritas_flag, s.claritas_state,
-        s.first_name, s.last_name, s.entity_code,
-        s.prism_flag, s.projection_flag, s.max_bytes,
-        AES_ENCRYPT(s.user_password, SHA2('forget1c#)', 512)) AS user_password,
-        s.esri_access, s.esri_tap_access, s.esri_state,
-        s.webuser, s.ppiuser, s.mapping, s.user_priority,
-        s.max_birt_processes, s.cms_states, s.ppi_detail_user,
-        s.`5_digit_zip`, s.max_row_cnt, s.transfers_flag, s.dataset_type,
-        s.create_date, s.modify_date, s.pw_flag,
-        s.cell_size_limit, s.export_detail,
-        s.web_esri_access, s.web_esri_tap_access,
-        s.web_inpatient_access, s.web_outpatient_access,
-        s.web_ed_access, s.web_claims_access
-    FROM secure.user_details_internal s
-    """,
-    # --- imic_control.user_details_2023 ---
-    "TRUNCATE TABLE imic_control.user_details_2023",
-    """
-    INSERT IGNORE INTO imic_control.user_details_2023
-    SELECT
-        s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
-        s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
-        s.logging_flag, s.claritas_flag, s.claritas_state,
-        s.first_name, s.last_name, s.entity_code,
-        s.prism_flag, s.projection_flag, s.max_bytes,
-        AES_ENCRYPT(s.user_password, SHA2('forget1c#)', 512)) AS user_password,
-        s.esri_access, s.esri_tap_access, s.esri_state,
-        s.webuser, s.ppiuser, s.mapping, s.user_priority,
-        s.max_birt_processes, s.cms_states, s.ppi_detail_user,
-        s.`5_digit_zip`, s.max_row_cnt, s.transfers_flag, s.dataset_type,
-        s.create_date, s.modify_date, s.pw_flag,
-        s.aprdrg_flag, s.export_flag, s.export_row_limit, s.webapp_flag,
-        s.cell_size_limit, s.export_detail,
-        s.web_esri_access, s.web_esri_tap_access,
-        s.web_inpatient_access, s.web_outpatient_access,
-        s.web_ed_access, s.web_claims_access
-    FROM secure.user_details_internal_2023 s
-    WHERE s.dataset_type = 'd'
-    """,
 )
 
 
@@ -463,14 +417,9 @@ _GRANT_GENERATORS: tuple[str, ...] = (
     WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
     """,
 
-    # myuser + imic_control + volatile_data
+    # myuser + volatile_data
     """
     SELECT CONCAT('GRANT SELECT ON `myuser`.* TO `', user_id, '`@`%`;')
-    FROM   secure.user_details_internal_2026
-    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
-    """,
-    """
-    SELECT CONCAT('GRANT SELECT ON `imic_control`.* TO `', user_id, '`@`%`;')
     FROM   secure.user_details_internal_2026
     WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
     """,
@@ -555,7 +504,7 @@ def grants_for_customer(conn: Connection, customer_code: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Revokes — the exact inverse of the grant process (refresh + grants).
+# Revokes.
 #
 # For each user that Run grants would CREATE (read from the SAME source the
 # CREATE USER generators use — secure.user_details_internal_2026, disable=0,
@@ -563,23 +512,22 @@ def grants_for_customer(conn: Connection, customer_code: int) -> int:
 #   1. REVOKE ALL PRIVILEGES, GRANT OPTION FROM '<user>'@'%'
 #   2. DROP USER IF EXISTS '<user>'@'%'
 #
-# Then we delete the customer's rows from EVERY user_details* table the
-# refresh populates (see _REVOKE_CLEANUP_STATEMENTS) — inverting the
-# refresh's INSERTs across all eight tables, not just the 2026 pair.
+# Then we delete the customer's rows from the three secure.user_details_
+# internal* tables (see _REVOKE_CLEANUP_STATEMENTS). By request the cleanup is
+# scoped to those only — myuser.user_details* and imic_control are left
+# untouched — so this is intentionally NOT a full inverse of the refresh.
 #
 # REVOKE ALL PRIVILEGES, GRANT OPTION removes privileges at every level
-# (global like FILE, db, table, routine), so it is a complete inverse of
-# the GRANT statements; DROP USER then removes the account, the inverse of
-# CREATE USER. The REVOKE is redundant before DROP — DROP cleans up
-# everything — but it makes the audit trail explicit and is defensive if
-# DROP fails (e.g. open connections holding the account).
+# (global like FILE, db, table, routine); DROP USER then removes the account,
+# the inverse of CREATE USER. The REVOKE is redundant before DROP — DROP
+# cleans up everything — but it makes the audit trail explicit and is
+# defensive if DROP fails (e.g. open connections holding the account).
 #
 # The cleanup is "soft": the canonical secure.customer_users row stays with
 # disable=0. Re-running Run grants for this customer refreshes the lookup
 # tables from customer_users and re-creates/re-grants any user still
-# disable=0 — Remove grants and Run grants are inverse operator actions. To
-# make removal permanent, also flip the user's disable flag (or delete the
-# row) in the Users table.
+# disable=0. To make removal permanent, also flip the user's disable flag
+# (or delete the row) in the Users table.
 # ---------------------------------------------------------------------------
 
 # Both generators read the user list from secure.user_details_internal_2026 —
@@ -603,18 +551,14 @@ _DROP_USER_GENERATOR = """
 
 # Lookup-table cleanup. Run AFTER the REVOKE/DROP statements have been
 # collected (see revokes_for_customer), this deletes the customer's rows from
-# every user_details* table the refresh populates — the exact inverse of the
-# refresh's INSERTs. Parameterized on :cc, applied via text() like the rest.
-# No FK between these tables, so order is irrelevant.
+# the three secure.user_details_internal* tables. Scoped to those by request:
+# myuser.user_details* and the imic_control tables are intentionally left
+# untouched, so this is NOT a full inverse of the refresh's INSERTs.
+# Parameterized on :cc, applied via text(); no FK between them, order is moot.
 _REVOKE_CLEANUP_STATEMENTS: tuple[str, ...] = (
     "DELETE FROM secure.user_details_internal      WHERE customer_code = :cc",
     "DELETE FROM secure.user_details_internal_2023 WHERE customer_code = :cc",
     "DELETE FROM secure.user_details_internal_2026 WHERE customer_code = :cc",
-    "DELETE FROM myuser.user_details               WHERE customer_code = :cc",
-    "DELETE FROM myuser.user_details_2023          WHERE customer_code = :cc",
-    "DELETE FROM myuser.user_details_2026          WHERE customer_code = :cc",
-    "DELETE FROM imic_control.user_details         WHERE customer_code = :cc",
-    "DELETE FROM imic_control.user_details_2023    WHERE customer_code = :cc",
 )
 
 
