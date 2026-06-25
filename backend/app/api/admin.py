@@ -106,16 +106,16 @@ def retry_grants(
     """Run grants for a customer, refreshing the user_details views first.
 
     The grants generators read from secure.user_details_internal_2026 and
-    myuser.user_details_2026 — both denormalized views populated by the
+    myuser.user_details_2026 — both denormalized tables populated by the
     refresh. Without a fresh refresh, a customer/user/dataset created
     moments ago is invisible to the grants step and the endpoint returns
     "0 statements applied" with no error, which is a foot-gun.
 
-    To avoid that, we refresh first. If refresh is disabled by config
-    (an external process owns it), we skip the refresh and run grants
-    against whatever state that process has produced. If refresh fails,
-    we don't run grants — running them against stale data would just
-    repeat the silent-failure problem.
+    On the cs-tool deployment there's no external process refreshing
+    these tables, so we run refresh_all unconditionally here, ignoring
+    the ENABLE_VIEW_REFRESH flag. (The flag still gates the standalone
+    POST /retry-refresh endpoint, but in practice this is the only place
+    that matters.)
     """
     if customer_code < 0:
         raise HTTPException(
@@ -123,43 +123,34 @@ def retry_grants(
             detail="customer_code must be non-negative",
         )
 
-    settings = get_settings()
-    refresh_status: Literal["skipped_disabled", "succeeded", "failed"]
+    refresh_status: Literal["succeeded", "failed"]
     refresh_error: str | None = None
 
-    # Phase 1: refresh (if enabled).
-    if not settings.enable_view_refresh:
-        refresh_status = "skipped_disabled"
-    else:
-        try:
-            with get_raw_connection() as conn:
-                refresh_all(conn)
-            refresh_status = "succeeded"
-        except RefreshDisabled as e:
-            # Belt-and-suspenders: the flag check above should have caught
-            # this, but sync_sql.refresh_all guards independently.
-            refresh_status = "skipped_disabled"
-            refresh_error = str(e)
-        except Exception as e:
-            log.exception("retry-grants: refresh phase failed")
-            refresh_status = "failed"
-            refresh_error = str(e)
-            with get_connection() as conn:
-                audit.record(
-                    conn,
-                    user_id=agent.user_id,
-                    action="admin.retry_grants.failed",
-                    entity_type="sync",
-                    entity_key=str(customer_code),
-                    notes=f"refresh phase failed: {e}",
-                    ip=_client_ip(request),
-                )
-            return RetryResponse(
-                ok=False,
-                error=f"Refresh failed before grants ran: {e}",
-                refresh_status=refresh_status,
-                refresh_error=refresh_error,
+    # Phase 1: refresh, always. force=True bypasses ENABLE_VIEW_REFRESH.
+    try:
+        with get_raw_connection() as conn:
+            refresh_all(conn, force=True)
+        refresh_status = "succeeded"
+    except Exception as e:
+        log.exception("retry-grants: refresh phase failed")
+        refresh_status = "failed"
+        refresh_error = str(e)
+        with get_connection() as conn:
+            audit.record(
+                conn,
+                user_id=agent.user_id,
+                action="admin.retry_grants.failed",
+                entity_type="sync",
+                entity_key=str(customer_code),
+                notes=f"refresh phase failed: {e}",
+                ip=_client_ip(request),
             )
+        return RetryResponse(
+            ok=False,
+            error=f"Refresh failed before grants ran: {e}",
+            refresh_status=refresh_status,
+            refresh_error=refresh_error,
+        )
 
     # Phase 2: grants.
     try:

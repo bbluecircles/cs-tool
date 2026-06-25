@@ -252,13 +252,20 @@ class RefreshDisabled(RuntimeError):
     """Raised when refresh_all is called while ENABLE_VIEW_REFRESH is off."""
 
 
-def refresh_all(conn: Connection) -> None:
+def refresh_all(conn: Connection, *, force: bool = False) -> None:
     """Truncate and rebuild every user_details* view, serialized by advisory
     lock. Respects ENABLE_VIEW_REFRESH — if the flag is off, refuses to run
     rather than silently doing nothing, so the admin UI can show a clear
     "disabled by config" message.
+
+    Pass force=True to bypass the config flag. Used by retry_grants, which
+    needs the refresh to happen unconditionally — otherwise a brand-new
+    user inserted seconds ago wouldn't show up in user_details_internal_2026
+    and the grants step would generate zero statements with no error,
+    leaving the agent with a "0 statements applied" success message and a
+    user who can't log in.
     """
-    if not get_settings().enable_view_refresh:
+    if not force and not get_settings().enable_view_refresh:
         raise RefreshDisabled(
             "View refresh is disabled via ENABLE_VIEW_REFRESH=false."
         )
