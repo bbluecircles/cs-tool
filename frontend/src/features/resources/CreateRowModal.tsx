@@ -7,11 +7,13 @@
  */
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import clsx from 'clsx'
 import { ApiError } from '@/api/client'
 import { createResource } from '@/api/resources'
 import type { ColumnDef, ResourceConfig } from './resourceConfigs'
 import { CustomerPicker } from './CustomerPicker'
 import { DatabasePicker, useDbFeatures } from './DatabasePicker'
+import { DatabasePickerMulti } from './DatabasePickerMulti'
 import { ModalShell } from './ModalShell'
 
 interface CreateRowModalProps {
@@ -82,11 +84,31 @@ export function CreateRowModal({
     })
   }
 
+  // Submission mode. For Claim (createMultiColumnKey set), we loop one
+  // POST per value in that column's array. For everything else, a
+  // single POST. Single-row mode goes through a normal useMutation;
+  // multi mode uses local state for progress + per-item error capture.
+  const multiKey = config.createMultiColumnKey
+  const multiValues: string[] =
+    multiKey && Array.isArray(effectiveValues[multiKey])
+      ? (effectiveValues[multiKey] as string[])
+      : []
+  const isMultiMode = !!multiKey
+
+  const [multiProgress, setMultiProgress] = useState<{
+    current: number
+    total: number
+  } | null>(null)
+  const [multiResult, setMultiResult] = useState<{
+    created: number
+    failed: number
+    failures: { value: string; error: string }[]
+  } | null>(null)
+
   const m = useMutation({
     mutationFn: () => createResource(config.slug, effectiveValues),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [config.slug] })
-      // Customers list also powers pickers elsewhere.
       qc.invalidateQueries({ queryKey: ['customer-picker'] })
       onCreated()
     },
@@ -97,7 +119,12 @@ export function CreateRowModal({
     for (const c of createFields) {
       if (c.requiredOnCreate) {
         const v = effectiveValues[c.key]
-        if (v === null || v === undefined || v === '') {
+        // For multi columns, "required" means at least one value.
+        if (c.createKind === 'database_picker_multi') {
+          if (!Array.isArray(v) || v.length === 0) {
+            next[c.key] = 'Pick at least one.'
+          }
+        } else if (v === null || v === undefined || v === '') {
           next[c.key] = 'Required.'
         }
       }
@@ -106,9 +133,52 @@ export function CreateRowModal({
     return Object.keys(next).length === 0
   }
 
+  async function doMultiCreate() {
+    if (!multiKey) return
+    setMultiProgress({ current: 0, total: multiValues.length })
+    setMultiResult(null)
+    let created = 0
+    const failures: { value: string; error: string }[] = []
+    for (let i = 0; i < multiValues.length; i++) {
+      const v = multiValues[i]!
+      setMultiProgress({ current: i + 1, total: multiValues.length })
+      // Per-row payload: all the shared fields plus this one value
+      // for the multi column.
+      const payload: Record<string, unknown> = {
+        ...effectiveValues,
+        [multiKey]: v,
+      }
+      try {
+        await createResource(config.slug, payload)
+        created += 1
+      } catch (e) {
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : e instanceof Error
+              ? e.message
+              : String(e)
+        failures.push({ value: v, error: msg })
+      }
+    }
+    setMultiProgress(null)
+    setMultiResult({ created, failed: failures.length, failures })
+    qc.invalidateQueries({ queryKey: [config.slug] })
+    qc.invalidateQueries({ queryKey: ['multi-picker-exclude'] })
+    if (failures.length === 0) {
+      // Clean success — close like normal. If any failed, leave the
+      // modal open so the agent can see what didn't go through.
+      onCreated()
+    }
+  }
+
   function onSubmit() {
     if (!validate()) return
-    m.mutate()
+    if (isMultiMode) {
+      void doMultiCreate()
+    } else {
+      m.mutate()
+    }
   }
 
   const submitError =
@@ -149,6 +219,7 @@ export function CreateRowModal({
               error={errors[col.key]}
               disabled={override?.disabled ?? false}
               onChange={(v) => setValue(col.key, v)}
+              allValues={effectiveValues}
             />
           )
         })}
@@ -160,22 +231,57 @@ export function CreateRowModal({
         </div>
       )}
 
+      {/* Multi-create progress / result. Only relevant when the resource
+          opted into multi-mode via createMultiColumnKey (Claim today). */}
+      {multiProgress !== null && (
+        <div className="mt-4 rounded-md border border-secondary-500/40 bg-secondary-100/40 px-3 py-2 text-sm text-gray-900">
+          Creating {multiProgress.current} of {multiProgress.total}…
+        </div>
+      )}
+      {multiResult !== null && (
+        <div
+          className={clsx(
+            'mt-4 rounded-md border px-3 py-2 text-sm text-gray-900',
+            multiResult.failed === 0
+              ? 'border-secondary-500/40 bg-secondary-100/40'
+              : 'border-error-600/40 bg-error-100/40',
+          )}
+        >
+          {multiResult.failed === 0
+            ? `Created ${multiResult.created} row${multiResult.created === 1 ? '' : 's'}.`
+            : `${multiResult.created} created, ${multiResult.failed} failed.`}
+          {multiResult.failures.length > 0 && (
+            <ul className="mt-1 text-xs space-y-0.5">
+              {multiResult.failures.map((f) => (
+                <li key={f.value}>
+                  <span className="font-mono">{f.value}</span>: {f.error}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
       <div className="mt-6 flex items-center justify-end gap-2">
         <button
           type="button"
           className="btn-ghost"
           onClick={onClose}
-          disabled={m.isPending}
+          disabled={m.isPending || multiProgress !== null}
         >
-          Cancel
+          {multiResult !== null && multiResult.failed === 0 ? 'Close' : 'Cancel'}
         </button>
         <button
           type="button"
           className="btn-primary"
           onClick={onSubmit}
-          disabled={m.isPending}
+          disabled={m.isPending || multiProgress !== null}
         >
-          {m.isPending ? 'Creating…' : 'Create'}
+          {m.isPending || multiProgress !== null
+            ? 'Creating…'
+            : isMultiMode && multiValues.length > 1
+              ? `Create ${multiValues.length} rows`
+              : 'Create'}
         </button>
       </div>
     </ModalShell>
@@ -188,15 +294,20 @@ function FieldRow({
   error,
   disabled,
   onChange,
+  allValues,
 }: {
   column: ColumnDef
   value: unknown
   error?: string
   disabled?: boolean
   onChange: (v: unknown) => void
+  allValues?: Record<string, unknown>
 }) {
-  const spanClass =
-    column.createSpan === 1
+  // Multi-select wants the full row width since it shows chips.
+  const isMulti = column.createKind === 'database_picker_multi'
+  const spanClass = isMulti
+    ? 'col-span-2'
+    : column.createSpan === 1
       ? ''
       : column.createSpan === 2
         ? 'col-span-2'
@@ -215,6 +326,7 @@ function FieldRow({
         onChange={onChange}
         invalid={!!error}
         disabled={disabled}
+        allValues={allValues}
       />
       {error && <div className="text-[11px] text-error-600">{error}</div>}
     </div>
@@ -227,14 +339,43 @@ function FieldInput({
   onChange,
   invalid,
   disabled,
+  allValues,
 }: {
   column: ColumnDef
   value: unknown
   onChange: (v: unknown) => void
   invalid?: boolean
   disabled?: boolean
+  /** Other form fields, so multi-picker can read customer_code for
+   *  its exclude query. Passed through from CreateRowModal. */
+  allValues?: Record<string, unknown>
 }) {
   const cls = `input ${invalid ? 'input-error' : ''}`
+
+  // Effective kind for the create form. Defaults to base kind unless
+  // the column overrides it (only Claim's ppi_state does today).
+  const effectiveKind = column.createKind ?? column.kind
+
+  if (effectiveKind === 'database_picker_multi') {
+    const customerCode =
+      typeof allValues?.customer_code === 'number'
+        ? (allValues.customer_code as number)
+        : null
+    return (
+      <DatabasePickerMulti
+        values={Array.isArray(value) ? (value as string[]) : []}
+        onChange={(v: string[]) => onChange(v)}
+        required={column.requiredOnCreate}
+        className={cls}
+        disabled={disabled}
+        requireDischargeFeatures={column.pickerRequireDischargeFeatures}
+        requireNoDischargeFeatures={column.pickerRequireNoDischargeFeatures}
+        excludeFromResourceSlug={column.pickerExcludeFromResource}
+        excludeColumnKey={column.pickerExcludeColumnKey}
+        excludeForCustomerCode={customerCode}
+      />
+    )
+  }
 
   if (column.kind === 'customer_code') {
     return (
@@ -319,6 +460,10 @@ function FieldInput({
 }
 
 function defaultForKind(c: ColumnDef): unknown {
+  // The create form may render this column as a multi-select even if
+  // its base kind is single-select. Seed the form value to match what
+  // the input expects.
+  if (c.createKind === 'database_picker_multi') return []
   if (c.kind === 'flag' || c.kind === 'int') return c.min ?? 0
   return ''
 }

@@ -41,6 +41,9 @@ export type ColumnKind =
   | 'datetime'   // ISO string, read-only formatted
   | 'customer_code'  // int with a dropdown picker (customers list)
   | 'database_picker' // string with a dropdown picker (myuser.db_database list)
+  | 'database_picker_multi' // string[] with a chip-style multi-select.
+                            // Create-form only — not valid for inline edit.
+                            // Used by Claim create to insert N rows at once.
 
 /**
  * Drives which input renders in the per-column filter row beneath the
@@ -122,6 +125,24 @@ export interface ColumnDef {
    */
   pickerRequireNoDischargeFeatures?: boolean
   /**
+   * Overrides the input type rendered in the create form. Most columns
+   * have the same kind in cells, edit modal, and create form — but
+   * Claim's ppi_state cell is a single-pick database_picker while the
+   * create form is a multi-select. Defaults to `kind`.
+   */
+  createKind?: ColumnKind
+  /**
+   * For kind: 'database_picker_multi' columns: fetch existing rows
+   * from this resource slug filtered to the current form's
+   * customer_code, and hide any candidates whose database_name (or
+   * the column named in pickerExcludeColumnKey) already appears
+   * there. Claim sets this to 'ppi-datasets' / 'ppi_state' so the
+   * agent doesn't get to pick states the customer already has rows
+   * for.
+   */
+  pickerExcludeFromResource?: string
+  pickerExcludeColumnKey?: string
+  /**
    * For kind: 'customer_code' read-only cells: when true, render the
    * bare integer instead of the substituted customer_name. Used when
    * a table has BOTH a separate "Code" column (raw) and a "Customer"
@@ -164,6 +185,15 @@ export interface ResourceConfig {
    *  the delete confirm to make the action concrete. Falls back to
    *  config.slug. */
   deleteTableName?: string
+  /**
+   * Name of the column whose value is treated as an array in the
+   * create form (driven by createKind: 'database_picker_multi' on
+   * that column). On submit, CreateRowModal loops once per array
+   * element, firing one POST per value with the rest of the form
+   * shared across all calls. Used by the Claim config to insert
+   * one row per ppi_state for a single customer_code.
+   */
+  createMultiColumnKey?: string
 }
 
 /**
@@ -181,6 +211,10 @@ export function effectiveFilterKind(col: ColumnDef): FilterKind | null {
     case 'customer_code': return 'customer_code'
     case 'database_picker': return 'database_picker'  // dropdown sourced from db_database
     case 'readonly':     return null
+    // database_picker_multi is create-form-only — not exposed as a
+    // column in any table, so it never reaches the filter row. Listed
+    // here for exhaustiveness so the switch typechecks.
+    case 'database_picker_multi': return null
   }
 }
 
@@ -551,6 +585,7 @@ export const ppiDatasetsConfig: ResourceConfig = {
   deleteImpactKind: 'none',
   deleteEntityLabel: 'this PPI row',
   deleteTableName: 'secure.ppi_dataset',
+  createMultiColumnKey: 'ppi_state',
   columns: [
     readonly('rec_id', 'Rec ID', { show: false }),
     {
@@ -572,9 +607,19 @@ export const ppiDatasetsConfig: ResourceConfig = {
       // Claims-only database, picked from myuser.db_database (filtered to
       // databases with NONE of the discharge features). The selected
       // database_name string is stored directly into ppi_state.
+      //
+      // In the table cell (inline edit) this is a single-pick
+      // database_picker. In the create form it's a database_picker_multi
+      // — the agent can pick N states and the modal will fire N POSTs,
+      // one per state, with the customer_code shared. createMultiColumnKey
+      // on the Claim config tells the modal which column carries the
+      // array.
       key: 'ppi_state', label: 'State', kind: 'database_picker', editable: true,
       maxLength: 25, showInCreate: true, requiredOnCreate: true,
       pickerRequireNoDischargeFeatures: true,
+      createKind: 'database_picker_multi',
+      pickerExcludeFromResource: 'ppi-datasets',
+      pickerExcludeColumnKey: 'ppi_state',
     },
     {
       key: 'ppi_detail', label: 'Detail', kind: 'flag', editable: true,

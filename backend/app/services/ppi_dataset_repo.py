@@ -168,3 +168,15 @@ def update_ppi_dataset(
         ),
         params,
     )
+
+
+def delete_ppi_dataset(conn: Connection, rec_id: int) -> int:
+    """Delete a PPI dataset row. Returns rowcount (0 if rec_id was
+    already gone, 1 on a normal delete). Matches the shape of
+    customer_dataset_repo.delete_customer_dataset.
+    """
+    result = conn.execute(
+        text("DELETE FROM secure.ppi_dataset WHERE rec_id = :rid"),
+        {"rid": rec_id},
+    )
+    return result.rowcount

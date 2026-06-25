@@ -159,8 +159,7 @@ def update_customer(
         audit.record(
             conn,
             user_id=agent.user_id,
-            action="customer.updat" \
-            "e",
+            action="customer.update",
             entity_type="secure.customer",
             entity_key=str(customer_code),
             before={k: before.get(k) for k in payload.changes.keys()},
