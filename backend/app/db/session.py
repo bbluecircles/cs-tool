@@ -58,14 +58,23 @@ def get_connection() -> Iterator[Connection]:
 
 @contextmanager
 def get_raw_connection() -> Iterator[Connection]:
-    """Yield a connection WITHOUT an implicit transaction.
+    """Yield a connection in AUTOCOMMIT mode.
 
-    Needed for DDL (CREATE USER, GRANT) which MariaDB auto-commits and which
-    can't participate in a transaction. The caller is responsible for managing
-    any transactional work explicitly.
+    Used for fire-and-forget admin operations that mix MariaDB DDL (CREATE
+    USER, GRANT, DROP USER, TRUNCATE — all implicitly committed by MariaDB)
+    with DML (the refresh INSERTs and the revoke cleanup DELETEs). AUTOCOMMIT
+    makes every statement persist immediately.
+
+    This previously used engine.connect() with no transaction, which rolled
+    back any uncommitted DML on exit. The DDL survived (MariaDB commits it
+    server-side), but DML not followed by a DDL statement silently vanished —
+    e.g. the revoke's DELETEs after DROP USER (account gone, lookup rows
+    stayed) and the refresh's final INSERT into myuser.user_details_2026.
+    AUTOCOMMIT removes that footgun. get_connection() still owns
+    transactional, request-scoped work.
     """
     engine = get_engine()
-    with engine.connect() as conn:
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
         yield conn
 
 
