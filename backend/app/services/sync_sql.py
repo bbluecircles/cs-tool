@@ -52,6 +52,32 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
     JOIN secure.customer_users cu    ON c.customer_code = cu.customer_code
     JOIN secure.customer_dataset cd  ON c.customer_code = cd.customer_code
     WHERE cu.`disable` = 0
+    UNION ALL
+    SELECT
+        cu.user_id, cu.e_mail, cu.`disable`,
+        c.customer_name, c.customer_code,
+        pd.ppi_state AS database_name,
+        '0' AS sg2, '0' AS sg2_op,
+        '0' AS inpatient, '0' AS outpatient, '0' AS ed,
+        cu.logging_flag, '0' AS claritas_flag, 'AZ' AS claritas_state,
+        cu.first_name, cu.last_name, c.entity_code,
+        '0' AS prism_flag, '1' AS projection_flag, c.max_bytes,
+        cu.user_password, cu.esri_access, cu.esri_tap_access, cu.esri_state,
+        cu.webuser, cu.ppiuser, cu.mapping, cu.user_priority,
+        cu.max_birt_processes,
+        'AL,AK,AZ,AR,CA,CO,CT,DC,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY' AS cms_states,
+        cu.ppi_detail_user,
+        c.`5_digit_zip`, c.max_row_cnt,
+        '0' AS transfers_flag, 'c' AS dataset_type,
+        cu.create_date, cu.modify_date, cu.pw_flag,
+        pd.cell_size_limit, pd.export_detail,
+        cu.web_esri_access, cu.web_esri_tap_access,
+        cu.web_inpatient_access, cu.web_outpatient_access,
+        cu.web_ed_access, cu.web_claims_access
+    FROM   secure.customer c
+    JOIN   secure.customer_users cu  ON c.customer_code = cu.customer_code
+    INNER JOIN secure.ppi_dataset pd ON c.customer_code = pd.customer_code
+    WHERE  cu.`disable` = 0
     """,
     # --- secure.user_details_internal_2023 ---
     "TRUNCATE TABLE secure.user_details_internal_2023",
@@ -78,6 +104,35 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
     JOIN secure.customer_users cu    ON c.customer_code = cu.customer_code
     JOIN secure.customer_dataset cd  ON c.customer_code = cd.customer_code
     WHERE cu.`disable` = 0
+    UNION ALL
+    SELECT
+        cu.user_id, cu.e_mail, cu.`disable`,
+        c.customer_name, c.customer_code,
+        pd.ppi_state AS database_name,
+        '0' AS sg2, '0' AS sg2_op,
+        '0' AS inpatient, '0' AS outpatient, '0' AS ed,
+        cu.logging_flag, '0' AS claritas_flag,
+        'AL,AK,AZ,AR,CA,CO,CT,DC,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY' AS claritas_state,
+        cu.first_name, cu.last_name, c.entity_code,
+        '0' AS prism_flag, '1' AS projection_flag, c.max_bytes,
+        cu.user_password, cu.esri_access, cu.esri_tap_access, cu.esri_state,
+        cu.webuser, cu.ppiuser, cu.mapping, cu.user_priority,
+        cu.max_birt_processes,
+        'AL,AK,AZ,AR,CA,CO,CT,DC,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY' AS cms_states,
+        cu.ppi_detail_user,
+        c.`5_digit_zip`, c.max_row_cnt,
+        '0' AS transfers_flag, 'c' AS dataset_type,
+        cu.create_date, cu.modify_date, cu.pw_flag,
+        '0' AS aprdrg_flag, '1' AS export_flag,
+        '100000000' AS export_row_limit, '1' AS webapp_flag,
+        pd.cell_size_limit, pd.export_detail,
+        cu.web_esri_access, cu.web_esri_tap_access,
+        cu.web_inpatient_access, cu.web_outpatient_access,
+        cu.web_ed_access, cu.web_claims_access
+    FROM   secure.customer c
+    JOIN   secure.customer_users cu  ON c.customer_code = cu.customer_code
+    INNER JOIN secure.ppi_dataset pd ON c.customer_code = pd.customer_code
+    WHERE  cu.`disable` = 0
     """,
     # --- secure.user_details_internal_2026 ---
     "TRUNCATE TABLE secure.user_details_internal_2026",
@@ -286,6 +341,50 @@ def refresh_all(conn: Connection, *, force: bool = False) -> None:
         conn.execute(text("SELECT RELEASE_LOCK('cs_tool_refresh')"))
 
 
+# Per-table write grants on `myuser`.* (reference grant script, section 07).
+# The DB-level `myuser` grant is SELECT-only by design, so these table-scoped
+# INSERT/UPDATE/DELETE grants are REQUIRED, not redundant. End users get write
+# access to their own report/group tables, never blanket write on `myuser`.
+_MYUSER_TABLE_GRANTS: tuple[tuple[str, str], ...] = (
+    ("execute_report",              "SELECT, INSERT, UPDATE"),
+    ("combined_grp_2011",           "SELECT, INSERT, UPDATE, DELETE"),
+    ("combined_grp_run_2011",       "SELECT, INSERT, UPDATE, DELETE"),
+    ("combined_grp_share_2011",     "SELECT, INSERT, UPDATE, DELETE"),
+    ("custom_grp_2011",             "SELECT, INSERT, UPDATE, DELETE"),
+    ("custom_grp_run_2011",         "SELECT, INSERT, UPDATE, DELETE"),
+    ("custom_grp_share_2011",       "SELECT, INSERT, UPDATE, DELETE"),
+    ("report_package_2013",         "SELECT, INSERT, UPDATE, DELETE"),
+    ("report_package_2019",         "SELECT, INSERT, UPDATE, DELETE"),
+    ("report_package_report_2013",  "SELECT, INSERT, UPDATE, DELETE"),
+    ("report_package_report_2019",  "SELECT, INSERT, UPDATE, DELETE"),
+    ("report_package_share_2013",   "SELECT, INSERT, UPDATE, DELETE"),
+    ("report_package_share_2019",   "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_dberror",                "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_email",                  "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_is_payor_score",         "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_msdrg_score",            "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_msdrg_specialty_score",  "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_report",                 "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_report_output_2013",     "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_report_output_2019",     "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_report_share",           "SELECT, INSERT, UPDATE, DELETE"),
+    ("user_st_payor_score",         "SELECT, INSERT, UPDATE, DELETE"),
+)
+
+
+def _myuser_table_grant_sql(table: str, privs: str) -> str:
+    """Build a GRANT generator for one `myuser` table. ``table``/``privs``
+    come only from _MYUSER_TABLE_GRANTS (hardcoded constants), so inlining
+    them is injection-safe; the user list is still read from the lookup
+    table by the :cc-parameterized query."""
+    return (
+        f"SELECT CONCAT('GRANT {privs} ON `myuser`.{table} "
+        f"TO `', user_id, '`@`%`;') "
+        f"FROM myuser.user_details_2026 "
+        f"WHERE `disable` = 0 AND customer_code = :cc GROUP BY user_id"
+    )
+
+
 _GRANT_GENERATORS: tuple[str, ...] = (
     # Create/alter user (with and without pw_flag prefix)
     """
@@ -381,6 +480,10 @@ _GRANT_GENERATORS: tuple[str, ...] = (
     WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
     """,
 
+    # myuser per-table write grants (reference section 07). DB-level `myuser`
+    # grant above is SELECT-only, so these table-scoped writes are required.
+    *[_myuser_table_grant_sql(_t, _p) for _t, _p in _MYUSER_TABLE_GRANTS],
+
     # State/claims DB (per-user database_name)
     """
     SELECT CONCAT('GRANT SELECT ON `', database_name, '`.* TO `', user_id, '`@`%`;')
@@ -405,6 +508,15 @@ _GRANT_GENERATORS: tuple[str, ...] = (
     # user_data
     """
     SELECT CONCAT('GRANT SELECT, INSERT, UPDATE, DELETE ON `user_data`.* TO `', user_id, '`@`%`;')
+    FROM   myuser.user_details_2026
+    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
+    """,
+
+    # user_data REFERENCES (reference section 11). The grant above already
+    # covers SELECT/INSERT/UPDATE/DELETE on user_data.*; this adds the
+    # REFERENCES privilege the reference script also grants.
+    """
+    SELECT CONCAT('GRANT REFERENCES, SELECT ON `user_data`.* TO `', user_id, '`@`%`;')
     FROM   myuser.user_details_2026
     WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
     """,
@@ -443,53 +555,66 @@ def grants_for_customer(conn: Connection, customer_code: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Revokes — the inverse of grants_for_customer.
+# Revokes — the exact inverse of the grant process (refresh + grants).
 #
-# For each active MariaDB user under a customer, we run:
+# For each user that Run grants would CREATE (read from the SAME source the
+# CREATE USER generators use — secure.user_details_internal_2026, disable=0,
+# matching customer_code), we run:
 #   1. REVOKE ALL PRIVILEGES, GRANT OPTION FROM '<user>'@'%'
-#   2. DROP USER '<user>'@'%'
+#   2. DROP USER IF EXISTS '<user>'@'%'
 #
-# Then we clean the lookup tables:
-#   3. DELETE FROM myuser.user_details_2026 WHERE customer_code = :cc
-#   4. DELETE FROM secure.user_details_internal_2026 WHERE customer_code = :cc
+# Then we delete the customer's rows from EVERY user_details* table the
+# refresh populates (see _REVOKE_CLEANUP_STATEMENTS) — inverting the
+# refresh's INSERTs across all eight tables, not just the 2026 pair.
 #
-# The REVOKE is technically redundant before DROP — DROP cleans up
-# everything — but it makes the audit trail explicit, which is useful
-# for compliance review. It's also defensive: if DROP fails for any
-# reason (e.g. open connections holding the account), the REVOKE has
-# already neutralized the account's access.
+# REVOKE ALL PRIVILEGES, GRANT OPTION removes privileges at every level
+# (global like FILE, db, table, routine), so it is a complete inverse of
+# the GRANT statements; DROP USER then removes the account, the inverse of
+# CREATE USER. The REVOKE is redundant before DROP — DROP cleans up
+# everything — but it makes the audit trail explicit and is defensive if
+# DROP fails (e.g. open connections holding the account).
 #
-# Note that the lookup-table cleanup is "soft" in the sense that the
-# canonical secure.customer_users row stays with disable=0. The next
-# time Run grants is executed for this customer, refresh_all repopulates
-# the lookup tables from customer_users, and the CREATE USER/GRANT
-# statements bring the user back. That's deliberate: Remove grants is
-# the inverse of Run grants, both of which are explicit operator
-# actions. To make the removal permanent, the agent should also flip
-# the user's disable flag (or delete the row) in the Users table.
+# The cleanup is "soft": the canonical secure.customer_users row stays with
+# disable=0. Re-running Run grants for this customer refreshes the lookup
+# tables from customer_users and re-creates/re-grants any user still
+# disable=0 — Remove grants and Run grants are inverse operator actions. To
+# make removal permanent, also flip the user's disable flag (or delete the
+# row) in the Users table.
 # ---------------------------------------------------------------------------
 
+# Both generators read the user list from secure.user_details_internal_2026 —
+# the SAME source the CREATE USER generators use — so the set of accounts we
+# DROP is exactly the set Run grants would CREATE. (myuser.user_details_2026
+# is built from this table with INSERT IGNORE; reading the source avoids a row
+# lost to a unique-key collision being created-but-never-dropped.)
 _REVOKE_GENERATOR = """
     SELECT CONCAT('REVOKE ALL PRIVILEGES, GRANT OPTION FROM `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
+    FROM   secure.user_details_internal_2026
     WHERE  `disable` = 0 AND customer_code = :cc
     GROUP BY user_id
 """
 
 _DROP_USER_GENERATOR = """
     SELECT CONCAT('DROP USER IF EXISTS `', user_id, '`@`%`;')
-    FROM   myuser.user_details_2026
+    FROM   secure.user_details_internal_2026
     WHERE  `disable` = 0 AND customer_code = :cc
     GROUP BY user_id
 """
 
-# Lookup-table cleanup statements. Parameterized on :cc — applied as
-# literal SQL via text() like the rest. Order doesn't matter (no FK
-# between the two), but we drain myuser first since that's the table
-# the grants generators read from.
+# Lookup-table cleanup. Run AFTER the REVOKE/DROP statements have been
+# collected (see revokes_for_customer), this deletes the customer's rows from
+# every user_details* table the refresh populates — the exact inverse of the
+# refresh's INSERTs. Parameterized on :cc, applied via text() like the rest.
+# No FK between these tables, so order is irrelevant.
 _REVOKE_CLEANUP_STATEMENTS: tuple[str, ...] = (
-    "DELETE FROM myuser.user_details_2026 WHERE customer_code = :cc",
+    "DELETE FROM secure.user_details_internal      WHERE customer_code = :cc",
+    "DELETE FROM secure.user_details_internal_2023 WHERE customer_code = :cc",
     "DELETE FROM secure.user_details_internal_2026 WHERE customer_code = :cc",
+    "DELETE FROM myuser.user_details               WHERE customer_code = :cc",
+    "DELETE FROM myuser.user_details_2023          WHERE customer_code = :cc",
+    "DELETE FROM myuser.user_details_2026          WHERE customer_code = :cc",
+    "DELETE FROM imic_control.user_details         WHERE customer_code = :cc",
+    "DELETE FROM imic_control.user_details_2023    WHERE customer_code = :cc",
 )
 
 

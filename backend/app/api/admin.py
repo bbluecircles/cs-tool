@@ -201,17 +201,20 @@ def retry_revokes(
     request: Request,
     agent: Annotated[CurrentAgent, Depends(require_admin)],
 ) -> RetryResponse:
-    """REVOKE ALL PRIVILEGES from every active user under a customer.
+    """Remove access for every active user under a customer: REVOKE ALL
+    PRIVILEGES, DROP USER, and delete the customer's rows from every
+    user_details* lookup table.
 
-    The inverse of retry_grants: strips privileges but leaves the
-    MariaDB user accounts in place. After this runs, the affected users
-    can no longer access any database; calling retry_grants on the same
-    customer puts everything back.
+    The exact inverse of retry_grants. Re-running retry_grants on the same
+    customer puts everything back: its refresh phase repopulates the lookup
+    tables from secure.customer_users (any user still disable=0 returns),
+    then re-creates the accounts and re-grants privileges.
 
     Skips the refresh phase by design — the agent has already chosen
-    "remove access," and a stale view of who counts as active is fine
-    for that purpose. (Adding a refresh would just slow things down
-    without changing the outcome materially.)
+    "remove access," and the revoke generators read the to-be-dropped user
+    list from the current (pre-refresh) lookup table. Refreshing first would
+    drop a just-disabled user from that table and make the DROP a no-op for
+    them, which is the opposite of what we want.
     """
     if customer_code < 0:
         raise HTTPException(

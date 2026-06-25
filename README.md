@@ -49,7 +49,7 @@ This project is being built in staged increments:
 As a MariaDB admin, run `backend/db/migrations/001_init.sql` after editing
 it to set a real password for the `cs_tool_svc` service account. The
 migration creates the service user, grants it what it needs, and creates
-the `myuser.cs_audit_log` table.
+the `secure.cs_audit_log` table.
 
 ### 2. First CS agent
 

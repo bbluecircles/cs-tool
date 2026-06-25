@@ -7,7 +7,7 @@
 --   1. Creates the service-account MariaDB user the app connects as for
 --      reads, writes, refresh, and grants execution.
 --   2. Grants that user the privileges it needs.
---   3. Creates myuser.cs_audit_log — the append-only record of every change
+--   3. Creates secure.cs_audit_log — the append-only record of every change
 --      the tool makes.
 --
 -- There is NO separate "CS agents" table. Admin access to this tool is
@@ -48,11 +48,11 @@ FLUSH PRIVILEGES;
 -- 2. Audit log (append-only)
 -- -----------------------------------------------------------------------------
 -- Every create, update, password reveal, and admin action writes one row
--- here. agent_username is the MariaDB user_id of the CS agent who performed
--- the action; there is no numeric FK since we don't maintain a separate
--- agents table.
+-- here. user_id is the MariaDB user_id of the CS agent who performed the
+-- action; there is no numeric FK since we don't maintain a separate agents
+-- table.
 
-USE `myuser`;
+USE `secure`;
 
 CREATE TABLE IF NOT EXISTS `cs_audit_log` (
   `id`             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS `cs_audit_log` (
   `ip`             VARCHAR(64)     NULL,
   `created_at`     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  KEY `ix_audit_agent`   (`agent_username`),
+  KEY `ix_audit_agent`   (`user_id`),
   KEY `ix_audit_entity`  (`entity_type`, `entity_key`),
   KEY `ix_audit_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;

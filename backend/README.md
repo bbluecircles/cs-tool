@@ -35,7 +35,7 @@ The `db/migrations` folder holds plain SQL files. Run them manually, in order, a
 mysql -h <host> -u <admin_user> -p < db\migrations\001_init.sql
 ```
 
-The migrations create `myuser.cs_agents` and `myuser.cs_audit_log`, and insert a bootstrap admin row you can use to log in the first time.
+The migration creates the `cs_tool_svc` service account and `secure.cs_audit_log` (the append-only audit trail). There is no separate agents table — admin access is determined by a user's `customer_code` (see "First CS agent").
 
 ## Run (dev)
 
