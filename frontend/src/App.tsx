@@ -1,7 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppShell } from '@/components/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { SessionExpiredToast } from '@/components/SessionExpiredToast'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { RequireAdmin } from '@/features/auth/RequireAdmin'
 import { RequireAuth } from '@/features/auth/RequireAuth'
@@ -23,7 +22,6 @@ import { ResourceTabs } from '@/features/resources/ResourceTabs'
 export function App() {
   return (
     <ErrorBoundary>
-      <SessionExpiredToast />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/" element={<Navigate to="/resources/customers" replace />} />
