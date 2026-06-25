@@ -364,7 +364,7 @@ export const customerUsersConfig: ResourceConfig = {
   rowKey: (r) => `u-${r.user_id}-${r.customer_code}`,
   primaryKeyColumns: ['user_id', 'customer_code'],
   sortableColumns: new Set([
-    'user_id', 'customer_code', 'e_mail', 'disable',
+    'user_id', 'customer_code', 'customer_name', 'e_mail', 'disable',
     'first_name', 'last_name',
     'esri_access', 'esri_tap_access', 'esri_state',
     'webuser', 'ppi_detail_user',
@@ -373,7 +373,9 @@ export const customerUsersConfig: ResourceConfig = {
     'web_ed_access', 'web_claims_access',
     'create_date', 'modify_date',
   ]),
-  filterByCustomerCode: true,
+  // No toolbar customer dropdown — filter by customer via the per-column
+  // Code (int) / Customer (text) inputs, like the Customers tab.
+  filterByCustomerCode: false,
   allowDelete: false,
   columns: [
     {
@@ -383,8 +385,17 @@ export const customerUsersConfig: ResourceConfig = {
       createSpan: 1,
     },
     {
-      key: 'customer_code', label: 'Customer', kind: 'customer_code',
+      // Customer code: raw integer, filter is an int input. The create
+      // form still uses this column as the FK picker (kind customer_code).
+      key: 'customer_code', label: 'Code', kind: 'customer_code',
       editable: false, showInCreate: true, requiredOnCreate: true,
+      displayRaw: true, filterKind: 'int',
+    },
+    {
+      // Customer name: projected from secure.customer via JOIN in
+      // customer_users_repo. Substring text filter, like Discharge / Claim.
+      key: 'customer_name', label: 'Customer', kind: 'text',
+      editable: false, showInCreate: false,
     },
     {
       key: 'user_password', label: 'Password', kind: 'text', editable: true,
@@ -470,7 +481,9 @@ export const customerDatasetsConfig: ResourceConfig = {
     'aprdrg_flag',
     'create_date', 'modify_date',
   ]),
-  filterByCustomerCode: true,
+  // No toolbar customer dropdown — filter via the per-column Code (int) /
+  // Customer (text) inputs.
+  filterByCustomerCode: false,
   allowDelete: true,
   deleteImpactKind: 'customer_dataset',
   deleteEntityLabel: 'this discharge dataset',
@@ -578,7 +591,9 @@ export const ppiDatasetsConfig: ResourceConfig = {
     'rec_id', 'customer_code', 'customer_name', 'ppi_state',
     'create_date', 'modify_date',
   ]),
-  filterByCustomerCode: true,
+  // No toolbar customer dropdown — filter via the per-column Code (int) /
+  // Customer (text) inputs.
+  filterByCustomerCode: false,
   allowDelete: true,
   // PPI rows aren't joined to individual users, so there's no
   // delete-impact preview to fetch.

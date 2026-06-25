@@ -13,7 +13,7 @@
  * cell and a blank filter cell so the columns align — without the spacer
  * the data column would shift left under the actions column.
  */
-import { useEffect, useMemo, useRef } from 'react'
+import { useMemo } from 'react'
 import {
   ColumnDef,
   flexRender,
@@ -99,7 +99,6 @@ export function ResourceTable({
   // become no-ops in that case.
   selectedKeys = EMPTY_SET,
   onToggleSelect,
-  onSetSelection,
   onShiftSelect,
   onOpenEditModal,
 }: ResourceTableProps) {
@@ -378,20 +377,13 @@ export function ResourceTable({
             {/* Row 1: column labels + sort indicators */}
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
-                {/* Checkbox header — header-checkbox toggles select-all
-                    for the current page. Indeterminate when some but
-                    not all are selected. */}
+                {/* Spacer for the per-row selection checkbox column. The
+                    select-all header checkbox was removed by request; bulk
+                    selection is via row click / shift-click. */}
                 <th
                   scope="col"
                   className="bg-table-header w-8 px-2 py-2 border-b border-border"
-                >
-                  <SelectAllCheckbox
-                    rows={rows}
-                    rowKey={config.rowKey}
-                    selectedKeys={selectedKeys}
-                    onSetSelection={onSetSelection}
-                  />
-                </th>
+                />
                 {hg.headers.map((h) => {
                   const canSort = h.column.getCanSort()
                   const sort = h.column.getIsSorted()
@@ -603,71 +595,6 @@ function LoadingRow({ columnCount }: { columnCount: number }) {
         </tr>
       ))}
     </>
-  )
-}
-
-function SelectAllCheckbox({
-  rows,
-  rowKey,
-  selectedKeys,
-  onSetSelection,
-}: {
-  rows: Row[]
-  rowKey: (r: Row) => string
-  selectedKeys: Set<string>
-  onSetSelection?: (keys: string[]) => void
-}) {
-  // Three states: none selected, all selected, or some selected
-  // (indeterminate). Indeterminate is set imperatively via ref since
-  // it's not a controllable prop on <input>.
-  const ref = useRef<HTMLInputElement | null>(null)
-  const visibleSelected = rows.filter((r) => selectedKeys.has(rowKey(r))).length
-  const all = rows.length > 0 && visibleSelected === rows.length
-  const some = visibleSelected > 0 && visibleSelected < rows.length
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = some
-  }, [some])
-  return (
-    <input
-      ref={ref}
-      type="checkbox"
-      className={clsx(
-        'h-4 w-4 cursor-pointer rounded',
-        'border border-gray-300 bg-white',
-        'appearance-none align-middle relative',
-        'checked:bg-secondary-500 checked:border-secondary-500',
-        "checked:after:content-[''] checked:after:absolute",
-        'checked:after:inset-0 checked:after:bg-no-repeat checked:after:bg-center',
-        "checked:after:bg-[url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='3.5 8.5 7 12 13 5'/></svg>\")]",
-        // Indeterminate state: secondary fill + a horizontal dash.
-        'indeterminate:bg-secondary-500 indeterminate:border-secondary-500',
-        "indeterminate:after:content-[''] indeterminate:after:absolute",
-        'indeterminate:after:left-[3px] indeterminate:after:right-[3px]',
-        'indeterminate:after:top-1/2 indeterminate:after:-translate-y-1/2',
-        'indeterminate:after:h-[2px] indeterminate:after:bg-white',
-        'indeterminate:after:rounded-full',
-        'hover:border-secondary-500 hover:ring-1 hover:ring-secondary-500/30',
-        'focus:outline-none focus:ring-2 focus:ring-secondary-500/40',
-        'transition-colors',
-        !onSetSelection && 'opacity-50 cursor-not-allowed',
-      )}
-      checked={all}
-      disabled={!onSetSelection}
-      onChange={() => {}}
-      onClick={(e) => {
-        e.stopPropagation()
-        if (!onSetSelection) return
-        // If everything's selected, clear. Otherwise select every
-        // visible row on this page in one shot. onSetSelection
-        // bypasses the per-click "replace with just this row"
-        // semantics on row checkboxes.
-        if (all) {
-          onSetSelection([])
-        } else {
-          onSetSelection(rows.map((r) => rowKey(r)))
-        }
-      }}
-    />
   )
 }
 

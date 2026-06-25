@@ -82,10 +82,20 @@ function SyncCard() {
             the chosen customer. Run this after creating a user, changing
             a password, or editing the database_name of a dataset.
           </div>
-          <div className="mt-3">
+          <div
+            className="mt-3"
+            title={
+              !canAct ? 'Select a customer above to run grants.' : undefined
+            }
+          >
             <button
               type="button"
-              className="btn-primary w-full"
+              className={clsx(
+                'btn-primary w-full',
+                // When disabled for lack of a customer, let pointer events
+                // fall through to the wrapper so its title tooltip shows.
+                !canAct && 'pointer-events-none',
+              )}
               onClick={() =>
                 customerCode !== null && grants.mutate(customerCode)
               }
@@ -97,9 +107,11 @@ function SyncCard() {
         </div>
 
         {/* Remove grants card — inverse of Run grants. Destructive: REVOKEs
-            all privileges for every active user under the customer. The
-            user accounts themselves stay; Run grants on the same customer
-            puts everything back. Two-click confirm to prevent fat-fingers. */}
+            all privileges AND drops the MariaDB user accounts (DROP USER)
+            for every active user under the customer, then clears the
+            secure.user_details_internal* rows. Run grants on the same
+            customer recreates them. Two-click confirm to prevent
+            fat-fingers. */}
         <div className="rounded-md border border-error-600/30 bg-error-100/30 p-3">
           <div className="flex items-center gap-2">
             <span className="inline-block h-2 w-2 rounded-full bg-error-600" />
@@ -113,11 +125,19 @@ function SyncCard() {
             customer. Run grants on the same customer afterwards
             recreates them from secure.user_details_internal_2026.
           </div>
-          <div className="mt-3">
+          <div
+            className="mt-3"
+            title={
+              !canAct ? 'Select a customer above to remove grants.' : undefined
+            }
+          >
             <button
               type="button"
               className={clsx(
                 'w-full rounded-md px-3 py-1.5 text-sm font-medium',
+                // Disabled-for-no-customer: pointer-events-none so the
+                // wrapper's title tooltip shows on hover.
+                !canAct && 'pointer-events-none',
                 revokeArmed
                   ? 'bg-error-600 text-white hover:bg-error-600/90'
                   : 'border border-error-600/40 text-error-600 hover:bg-error-100',

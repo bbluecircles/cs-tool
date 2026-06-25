@@ -30,9 +30,10 @@ EDITABLE_COLUMNS: tuple[str, ...] = (
     "web_ed_access", "web_claims_access",
 )
 
-# Every projected column is sortable.
+# Every projected column is sortable. customer_name comes from the JOIN to
+# secure.customer (see _FROM_JOINED / _COLUMN_MAP).
 SORTABLE_COLUMNS: frozenset[str] = frozenset({
-    "user_id", "customer_code", "e_mail", "disable",
+    "user_id", "customer_code", "customer_name", "e_mail", "disable",
     "first_name", "last_name", "pw_flag", "logging_flag",
     "esri_access", "esri_tap_access", "esri_state",
     "webuser", "ppiuser", "mapping", "user_priority",
@@ -47,17 +48,64 @@ SORTABLE_COLUMNS: frozenset[str] = frozenset({
 # the SELECT list so it's already absent.
 FILTERABLE_COLUMNS: frozenset[str] = SORTABLE_COLUMNS
 
+# customer_name is projected from secure.customer via the JOIN below. Both
+# tables carry customer_code / create_date / modify_date, so we alias both
+# and qualify every reference. The filter pipeline uses _COLUMN_MAP via
+# build_where(column_map=...) so WHERE clauses come back already qualified.
 _LIST_COLUMNS = """
-    user_id, customer_code, e_mail, `disable`, first_name, last_name,
-    pw_flag, logging_flag,
-    esri_access, esri_tap_access, esri_state,
-    webuser, ppiuser, mapping, user_priority,
-    max_birt_processes, ppi_detail_user,
-    web_esri_access, web_esri_tap_access,
-    web_inpatient_access, web_outpatient_access,
-    web_ed_access, web_claims_access,
-    create_date, modify_date
+    cu.user_id, cu.customer_code, c.customer_name AS customer_name,
+    cu.e_mail, cu.`disable`, cu.first_name, cu.last_name,
+    cu.pw_flag, cu.logging_flag,
+    cu.esri_access, cu.esri_tap_access, cu.esri_state,
+    cu.webuser, cu.ppiuser, cu.mapping, cu.user_priority,
+    cu.max_birt_processes, cu.ppi_detail_user,
+    cu.web_esri_access, cu.web_esri_tap_access,
+    cu.web_inpatient_access, cu.web_outpatient_access,
+    cu.web_ed_access, cu.web_claims_access,
+    cu.create_date, cu.modify_date
 """.strip()
+
+
+# JOIN with explicit aliases. LEFT JOIN so a user whose customer row is
+# somehow missing still appears (customer_name comes back NULL).
+_FROM_JOINED = (
+    "secure.customer_users AS cu "
+    "LEFT JOIN secure.customer AS c ON c.customer_code = cu.customer_code"
+)
+
+
+# Logical column name → qualified SQL. Passed to build_where so WHERE
+# clauses are unambiguous, and used to qualify ORDER BY. customer_code /
+# create_date / modify_date exist on BOTH tables, so qualifying them is
+# required, not optional.
+_COLUMN_MAP: dict[str, str] = {
+    "user_id":               "cu.user_id",
+    "customer_code":         "cu.customer_code",
+    "customer_name":         "c.customer_name",
+    "e_mail":                "cu.e_mail",
+    "disable":               "cu.`disable`",
+    "first_name":            "cu.first_name",
+    "last_name":             "cu.last_name",
+    "pw_flag":               "cu.pw_flag",
+    "logging_flag":          "cu.logging_flag",
+    "esri_access":           "cu.esri_access",
+    "esri_tap_access":       "cu.esri_tap_access",
+    "esri_state":            "cu.esri_state",
+    "webuser":               "cu.webuser",
+    "ppiuser":               "cu.ppiuser",
+    "mapping":               "cu.mapping",
+    "user_priority":         "cu.user_priority",
+    "max_birt_processes":    "cu.max_birt_processes",
+    "ppi_detail_user":       "cu.ppi_detail_user",
+    "web_esri_access":       "cu.web_esri_access",
+    "web_esri_tap_access":   "cu.web_esri_tap_access",
+    "web_inpatient_access":  "cu.web_inpatient_access",
+    "web_outpatient_access": "cu.web_outpatient_access",
+    "web_ed_access":         "cu.web_ed_access",
+    "web_claims_access":     "cu.web_claims_access",
+    "create_date":           "cu.create_date",
+    "modify_date":           "cu.modify_date",
+}
 
 
 def list_customer_users(
@@ -73,7 +121,7 @@ def list_customer_users(
     params: dict[str, Any] = {}
 
     if filters:
-        flt_clauses, flt_params = build_where(filters)
+        flt_clauses, flt_params = build_where(filters, column_map=_COLUMN_MAP)
         where_clauses.extend(flt_clauses)
         params.update(flt_params)
 
@@ -81,23 +129,24 @@ def list_customer_users(
 
     if sort_by and sort_by in SORTABLE_COLUMNS:
         direction = "ASC" if sort_dir.lower() != "desc" else "DESC"
-        order_sql = f"ORDER BY `{sort_by}` {direction}, user_id ASC"
+        sort_sql = _COLUMN_MAP.get(sort_by, f"`{sort_by}`")
+        order_sql = f"ORDER BY {sort_sql} {direction}, cu.user_id ASC"
     else:
-        order_sql = "ORDER BY user_id ASC"
+        order_sql = "ORDER BY cu.user_id ASC"
 
     offset = (page - 1) * page_size
     params["limit"] = page_size
     params["offset"] = offset
 
     total = int(conn.execute(
-        text(f"SELECT COUNT(*) FROM secure.customer_users {where_sql}"), params
+        text(f"SELECT COUNT(*) FROM {_FROM_JOINED} {where_sql}"), params
     ).scalar_one())
 
     rows = [dict(r) for r in conn.execute(
         text(
             f"""
             SELECT {_LIST_COLUMNS}
-            FROM   secure.customer_users
+            FROM   {_FROM_JOINED}
             {where_sql}
             {order_sql}
             LIMIT  :limit OFFSET :offset
@@ -115,8 +164,8 @@ def get_customer_user(
         text(
             f"""
             SELECT {_LIST_COLUMNS}
-            FROM   secure.customer_users
-            WHERE  user_id = :uid AND customer_code = :cc
+            FROM   {_FROM_JOINED}
+            WHERE  cu.user_id = :uid AND cu.customer_code = :cc
             LIMIT  1
             """
         ),
