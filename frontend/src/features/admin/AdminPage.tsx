@@ -82,18 +82,17 @@ function SyncCard() {
             the chosen customer. Run this after creating a user, changing
             a password, or editing the database_name of a dataset.
           </div>
-          <div
+          <HoverHint
+            show={!canAct}
+            message="Select a customer above to run grants."
             className="mt-3"
-            title={
-              !canAct ? 'Select a customer above to run grants.' : undefined
-            }
           >
             <button
               type="button"
               className={clsx(
                 'btn-primary w-full',
-                // When disabled for lack of a customer, let pointer events
-                // fall through to the wrapper so its title tooltip shows.
+                // Disabled-for-no-customer: pointer-events-none so hover
+                // reaches the wrapper and the tooltip shows.
                 !canAct && 'pointer-events-none',
               )}
               onClick={() =>
@@ -103,7 +102,7 @@ function SyncCard() {
             >
               {grants.isPending ? 'Running…' : 'Run grants'}
             </button>
-          </div>
+          </HoverHint>
         </div>
 
         {/* Remove grants card — inverse of Run grants. Destructive: REVOKEs
@@ -125,18 +124,17 @@ function SyncCard() {
             customer. Run grants on the same customer afterwards
             recreates them from secure.user_details_internal_2026.
           </div>
-          <div
+          <HoverHint
+            show={!canAct}
+            message="Select a customer above to remove grants."
             className="mt-3"
-            title={
-              !canAct ? 'Select a customer above to remove grants.' : undefined
-            }
           >
             <button
               type="button"
               className={clsx(
                 'w-full rounded-md px-3 py-1.5 text-sm font-medium',
-                // Disabled-for-no-customer: pointer-events-none so the
-                // wrapper's title tooltip shows on hover.
+                // Disabled-for-no-customer: pointer-events-none so hover
+                // reaches the wrapper and the tooltip shows.
                 !canAct && 'pointer-events-none',
                 revokeArmed
                   ? 'bg-error-600 text-white hover:bg-error-600/90'
@@ -158,7 +156,7 @@ function SyncCard() {
                   ? 'Click again to confirm'
                   : 'Remove grants'}
             </button>
-          </div>
+          </HoverHint>
         </div>
       </div>
 
@@ -314,6 +312,41 @@ function AuditCard() {
           </tbody>
         </table>
       </div>
+    </div>
+  )
+}
+
+function HoverHint({
+  show,
+  message,
+  className,
+  children,
+}: {
+  show: boolean
+  message: string
+  className?: string
+  children: React.ReactNode
+}) {
+  // Wrapper that shows a styled tooltip on hover when `show` is true. The
+  // wrapped (disabled) button must carry pointer-events-none so the hover
+  // lands on this group element instead of being swallowed by the button.
+  return (
+    <div className={clsx('relative', show && 'group', className)}>
+      {children}
+      {show && (
+        <div
+          role="tooltip"
+          className={clsx(
+            'pointer-events-none absolute bottom-full left-1/2 z-20 mb-2',
+            '-translate-x-1/2 whitespace-nowrap rounded-md bg-gray-900',
+            'px-2.5 py-1.5 text-xs font-medium text-white shadow-lg',
+            'opacity-0 transition-opacity duration-150 group-hover:opacity-100',
+          )}
+        >
+          {message}
+          <span className="absolute left-1/2 top-full -translate-x-1/2 border-4 border-transparent border-t-gray-900" />
+        </div>
+      )}
     </div>
   )
 }

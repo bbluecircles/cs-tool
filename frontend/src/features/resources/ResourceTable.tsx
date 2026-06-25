@@ -25,7 +25,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import type { ResourceFilter } from '@/api/resources'
 import { fetchDbDatabases, listResource } from '@/api/resources'
-import type { ResourceConfig } from './resourceConfigs'
+import type { ColumnDef as ResourceColumnDef, ResourceConfig } from './resourceConfigs'
 import { ColumnFilterInput } from './ColumnFilterInput'
 import { EditableCell } from './EditableCell'
 import { lookupDbFeatures } from './DatabasePicker'
@@ -373,6 +373,17 @@ export function ResourceTable({
     <div className="card overflow-hidden">
       <div className="overflow-auto max-h-[calc(100vh-300px)]">
         <table className="w-full text-sm border-collapse">
+          {/* Predicted column widths (auto layout treats them as preferred):
+              narrow-content columns settle near the prediction, long
+              free-text values can still grow. Keeps the wide Users table
+              from wasting space on flag columns. */}
+          <colgroup>
+            <col style={{ width: 32 }} />
+            {visibleConfigCols.map((col) => (
+              <col key={col.key} style={{ width: predictColumnWidthPx(col) }} />
+            ))}
+            <col style={{ width: 150 }} />
+          </colgroup>
           <thead className="sticky top-0 z-10">
             {/* Row 1: column labels + sort indicators */}
             {table.getHeaderGroups().map((hg) => (
@@ -393,7 +404,7 @@ export function ResourceTable({
                       scope="col"
                       className={clsx(
                         'bg-table-header text-left text-xs font-semibold',
-                        'text-gray-700 px-3 py-2 border-b border-border whitespace-nowrap',
+                        'text-gray-700 px-3 py-2 border-b border-border align-bottom',
                         canSort && 'cursor-pointer select-none hover:bg-primary-100',
                       )}
                       onClick={canSort ? h.column.getToggleSortingHandler() : undefined}
@@ -407,10 +418,10 @@ export function ResourceTable({
                           : undefined
                       }
                     >
-                      <span
-                        className="inline-flex items-center gap-1 pointer-events-none"
-                      >
-                        {flexRender(h.column.columnDef.header, h.getContext())}
+                      <span className="flex items-start gap-1 pointer-events-none">
+                        <span className="whitespace-normal break-words leading-tight">
+                          {flexRender(h.column.columnDef.header, h.getContext())}
+                        </span>
                         {canSort && (
                           <SortIndicator sort={sort === false ? null : sort} />
                         )}
@@ -603,4 +614,36 @@ function formatReadonly(kind: string, value: unknown): string {
   if (kind === 'datetime') return String(value).replace('T', ' ').slice(0, 16)
   if (kind === 'flag') return value === 1 || value === '1' ? 'Yes' : 'No'
   return String(value)
+}
+
+/**
+ * Predicted column width (px), derived from the column NAME plus a
+ * content-aware floor by kind. Headers are allowed to wrap, so the width
+ * only needs to fit the longest single word of the label — multi-word
+ * labels (e.g. "Web Claims") wrap and let the column stay narrow. Under
+ * auto table layout these act as preferred widths: short-content columns
+ * (flags, codes, dates) land near the prediction, while long free-text
+ * values can still grow their column. Goal: stop flag columns from eating
+ * horizontal space on the wide Users table.
+ */
+function predictColumnWidthPx(col: ResourceColumnDef): number {
+  const longestWord = Math.max(
+    1,
+    ...col.label.split(/\s+/).map((w) => w.length),
+  )
+  const labelPx = longestWord * 7 + 38 // ~7px/char + padding + sort glyph
+
+  let kindMin: number
+  switch (col.kind) {
+    case 'flag':            kindMin = 56; break
+    case 'int':             kindMin = 64; break
+    case 'datetime':        kindMin = 140; break
+    case 'customer_code':   kindMin = col.displayRaw ? 60 : 130; break
+    case 'database_picker': kindMin = 150; break
+    case 'readonly':        kindMin = 80; break
+    case 'text':            kindMin = col.isPassword ? 220 : 130; break
+    default:                kindMin = 100; break
+  }
+
+  return Math.min(Math.max(labelPx, kindMin), 240)
 }

@@ -358,58 +358,6 @@ export function ResourcePage({ config }: ResourcePageProps) {
     setLastSelectedKey(null)
   }
 
-  // --- bulk delete ---
-  // Same UX as Save all: sequential, continue past failures, progress
-  // counter + post-batch summary. Only enabled when config.allowDelete.
-  const [bulkDeleteProgress, setBulkDeleteProgress] = useState<{
-    current: number
-    total: number
-  } | null>(null)
-  const [bulkDeleteResult, setBulkDeleteResult] = useState<{
-    deleted: number
-    failed: number
-  } | null>(null)
-  // Two-click confirm. Resets if selection changes or any other action
-  // moves through the UI.
-  const [bulkDeleteArmed, setBulkDeleteArmed] = useState(false)
-  useEffect(() => {
-    setBulkDeleteArmed(false)
-    setBulkDeleteResult(null)
-  }, [selectedKeys])
-
-  async function doBulkDelete() {
-    if (!config.allowDelete || selectedKeys.size === 0) return
-    const keyToRow = new Map<string, Row>()
-    for (const r of rows) keyToRow.set(config.rowKey(r), r)
-    const targets: Row[] = []
-    for (const k of selectedKeys) {
-      const r = keyToRow.get(k)
-      if (r) targets.push(r)
-    }
-    if (targets.length === 0) return
-
-    setBulkDeleteProgress({ current: 0, total: targets.length })
-    setBulkDeleteResult(null)
-    let deleted = 0
-    let failed = 0
-    for (let i = 0; i < targets.length; i++) {
-      const target = targets[i]!
-      setBulkDeleteProgress({ current: i + 1, total: targets.length })
-      try {
-        await deleteM.mutateAsync(target)
-        dirty.clearRow(config.rowKey(target))
-        deleted += 1
-      } catch (e) {
-        console.error('bulk delete failed', e)
-        failed += 1
-      }
-    }
-    setBulkDeleteProgress(null)
-    setBulkDeleteResult({ deleted, failed })
-    setBulkDeleteArmed(false)
-    onClearSelection()
-  }
-
   // --- render ----
   const listError =
     q.error instanceof ApiError
@@ -480,58 +428,13 @@ export function ResourcePage({ config }: ResourcePageProps) {
         </div>
       ) : null}
 
-      {/* Selection toolbar: appears whenever ≥1 row is selected. The
-          three banners (save-all-progress, save-all-result, this one)
-          can stack: agent could be mid-bulk-save with a fresh selection,
-          or seeing a success summary while selecting more rows. That's
-          fine — each slot owns its own row in the layout. */}
-      {bulkDeleteProgress !== null ? (
-        <div className="rounded-md border border-secondary-500/40 bg-secondary-100/40 px-3 py-2 text-sm text-gray-900">
-          Deleting {bulkDeleteProgress.current} of {bulkDeleteProgress.total}…
-        </div>
-      ) : bulkDeleteResult !== null ? (
-        <div
-          className={clsx(
-            'rounded-md border px-3 py-2 text-sm text-gray-900',
-            bulkDeleteResult.failed === 0
-              ? 'border-secondary-500/40 bg-secondary-100/40'
-              : 'border-error-600/40 bg-error-100/40',
-          )}
-        >
-          {bulkDeleteResult.failed === 0
-            ? `Deleted ${bulkDeleteResult.deleted} row${bulkDeleteResult.deleted === 1 ? '' : 's'}.`
-            : `${bulkDeleteResult.deleted} deleted, ${bulkDeleteResult.failed} failed.`}
-        </div>
-      ) : selectedKeys.size > 0 ? (
+      {/* Selection toolbar: appears whenever ≥1 row is selected. Bulk
+          delete was removed — selection is kept for visibility only. */}
+      {selectedKeys.size > 0 && (
         <div className="flex items-center gap-3 rounded-md border border-secondary-500/40 bg-secondary-100/40 px-3 py-2 text-sm text-gray-900">
           <span className="flex-1">
             {selectedKeys.size} row{selectedKeys.size === 1 ? '' : 's'} selected
           </span>
-          {config.allowDelete && (
-            <button
-              type="button"
-              className={clsx(
-                'rounded-md px-3 py-1 text-sm font-medium',
-                bulkDeleteArmed
-                  ? 'bg-error-600 text-white hover:bg-error-600/90'
-                  : 'border border-error-600/40 text-error-600 hover:bg-error-100',
-              )}
-              onClick={() => {
-                if (!bulkDeleteArmed) {
-                  setBulkDeleteArmed(true)
-                  return
-                }
-                void doBulkDelete()
-              }}
-              disabled={deleteM.isPending}
-            >
-              {deleteM.isPending
-                ? 'Deleting…'
-                : bulkDeleteArmed
-                  ? 'Click again to confirm'
-                  : `Delete selected`}
-            </button>
-          )}
           <button
             type="button"
             className="btn-ghost"
@@ -540,7 +443,7 @@ export function ResourcePage({ config }: ResourcePageProps) {
             Clear
           </button>
         </div>
-      ) : null}
+      )}
 
       <ResourceTable
         config={config}
