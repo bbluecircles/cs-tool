@@ -449,16 +449,24 @@ def grants_for_customer(conn: Connection, customer_code: int) -> int:
 #   1. REVOKE ALL PRIVILEGES, GRANT OPTION FROM '<user>'@'%'
 #   2. DROP USER '<user>'@'%'
 #
-# The REVOKE is technically redundant before a DROP — DROP cleans up
+# Then we clean the lookup tables:
+#   3. DELETE FROM myuser.user_details_2026 WHERE customer_code = :cc
+#   4. DELETE FROM secure.user_details_internal_2026 WHERE customer_code = :cc
+#
+# The REVOKE is technically redundant before DROP — DROP cleans up
 # everything — but it makes the audit trail explicit, which is useful
 # for compliance review. It's also defensive: if DROP fails for any
 # reason (e.g. open connections holding the account), the REVOKE has
 # already neutralized the account's access.
 #
-# Run grants on the same customer afterwards puts everything back: the
-# grants generator uses CREATE USER IF NOT EXISTS, so re-creation is
-# automatic as long as secure.user_details_internal_2026 still has the
-# row (which it does — that's the source of truth, not mysql.user).
+# Note that the lookup-table cleanup is "soft" in the sense that the
+# canonical secure.customer_users row stays with disable=0. The next
+# time Run grants is executed for this customer, refresh_all repopulates
+# the lookup tables from customer_users, and the CREATE USER/GRANT
+# statements bring the user back. That's deliberate: Remove grants is
+# the inverse of Run grants, both of which are explicit operator
+# actions. To make the removal permanent, the agent should also flip
+# the user's disable flag (or delete the row) in the Users table.
 # ---------------------------------------------------------------------------
 
 _REVOKE_GENERATOR = """
@@ -474,6 +482,15 @@ _DROP_USER_GENERATOR = """
     WHERE  `disable` = 0 AND customer_code = :cc
     GROUP BY user_id
 """
+
+# Lookup-table cleanup statements. Parameterized on :cc — applied as
+# literal SQL via text() like the rest. Order doesn't matter (no FK
+# between the two), but we drain myuser first since that's the table
+# the grants generators read from.
+_REVOKE_CLEANUP_STATEMENTS: tuple[str, ...] = (
+    "DELETE FROM myuser.user_details_2026 WHERE customer_code = :cc",
+    "DELETE FROM secure.user_details_internal_2026 WHERE customer_code = :cc",
+)
 
 
 def _collect_revokes(conn: Connection, customer_code: int) -> list[str]:
@@ -494,22 +511,35 @@ def _collect_revokes(conn: Connection, customer_code: int) -> list[str]:
 
 def revokes_for_customer(conn: Connection, customer_code: int) -> int:
     """Strip access AND remove MariaDB accounts for every active user
-    under a customer.
+    under a customer, then clean the user_details lookup tables.
 
-    Returns count of executed statements. Individual failures are
-    logged but don't abort the rest — REVOKE failing on a user that
-    has no privileges is harmless; DROP USER failing on a non-existent
-    account (because of IF EXISTS) just no-ops.
+    Returns count of executed statements (REVOKEs + DROPs + cleanup
+    DELETEs). Individual failures are logged but don't abort the rest
+    — REVOKE failing on a user that has no privileges is harmless;
+    DROP USER failing on a non-existent account (because of IF EXISTS)
+    just no-ops; DELETE on an empty set just affects 0 rows.
     """
     stmts = _collect_revokes(conn, customer_code)
     ok = 0
+    # Phase 1: REVOKE then DROP per user.
     for stmt in stmts:
         try:
             conn.execute(text(stmt))
             ok += 1
         except Exception as e:
             log.warning("revoke/drop failed (%s): %s", stmt[:80], e)
+    # Phase 2: cleanup the denormalized lookup tables. These get
+    # rebuilt by refresh_all on the next Run grants, but for the
+    # window between Remove grants and any subsequent action, the
+    # tables shouldn't list users whose accounts were just dropped.
+    for stmt in _REVOKE_CLEANUP_STATEMENTS:
+        try:
+            conn.execute(text(stmt), {"cc": customer_code})
+            ok += 1
+        except Exception as e:
+            log.warning("revoke cleanup failed (%s): %s", stmt[:80], e)
+    total = len(stmts) + len(_REVOKE_CLEANUP_STATEMENTS)
     log.info(
-        "revokes_for_customer(%s): %d/%d ok", customer_code, ok, len(stmts)
+        "revokes_for_customer(%s): %d/%d ok", customer_code, ok, total
     )
     return ok
