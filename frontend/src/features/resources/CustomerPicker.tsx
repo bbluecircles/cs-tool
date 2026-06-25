@@ -55,14 +55,17 @@ export function CustomerPicker({
   allowAll,
   className,
 }: CustomerPickerProps) {
-  // We fetch up to 500 customers — adequate for this deployment's scale.
-  // Upgrade to a searchable combobox if the list outgrows that someday.
+  // Fetch up to 5000 customers in one shot. At the current scale
+  // (500-2000) this is one ~50KB JSON payload — cheaper than paginating
+  // and avoids the bug where the dropdown silently dropped customers
+  // past the page boundary. If the customer count ever crosses 5000,
+  // switch to a searchable combobox with backend autocomplete.
   const q = useQuery({
     queryKey: CUSTOMER_PICKER_QUERY_KEY,
     queryFn: () =>
       listResource<CustomerRow>('customers', {
         page: 1,
-        page_size: 200,
+        page_size: 5000,
         sort_by: 'customer_name',
         sort_dir: 'asc',
       }),

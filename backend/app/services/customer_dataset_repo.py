@@ -24,7 +24,8 @@ EDITABLE_COLUMNS: tuple[str, ...] = (
 )
 
 SORTABLE_COLUMNS: frozenset[str] = frozenset({
-    "rec_id", "customer_code", "database_name", "odbc_dataset",
+    "rec_id", "customer_code", "customer_name",
+    "database_name", "odbc_dataset",
     "sg2", "sg2_op", "inpatient", "outpatient", "ed",
     "claritas_flag", "claritas_state",
     "prism_flag", "projection_flag",
@@ -36,16 +37,65 @@ SORTABLE_COLUMNS: frozenset[str] = frozenset({
 
 FILTERABLE_COLUMNS: frozenset[str] = SORTABLE_COLUMNS
 
+# customer_name is projected from secure.customer via the JOIN below.
+# Because secure.customer also has create_date, modify_date, and a few
+# other columns that collide with secure.customer_dataset, we alias both
+# tables and qualify EVERY SELECT/WHERE/ORDER BY reference. The filter
+# pipeline uses _COLUMN_MAP via build_where(column_map=...) so the
+# WHERE clauses come back already qualified.
 _LIST_COLUMNS = """
-    rec_id, customer_code, database_name, odbc_dataset,
-    sg2, sg2_op, inpatient, outpatient, ed,
-    claritas_flag, claritas_state,
-    prism_flag, projection_flag, cms_states,
-    transfers_flag, dataset_type,
-    cell_size_limit, export_detail,
-    aprdrg_flag, export_flag, export_row_limit, webapp_flag,
-    create_date, modify_date
+    cd.rec_id, cd.customer_code, c.customer_name AS customer_name,
+    cd.database_name, cd.odbc_dataset,
+    cd.sg2, cd.sg2_op, cd.inpatient, cd.outpatient, cd.ed,
+    cd.claritas_flag, cd.claritas_state,
+    cd.prism_flag, cd.projection_flag, cd.cms_states,
+    cd.transfers_flag, cd.dataset_type,
+    cd.cell_size_limit, cd.export_detail,
+    cd.aprdrg_flag, cd.export_flag, cd.export_row_limit, cd.webapp_flag,
+    cd.create_date, cd.modify_date
 """.strip()
+
+
+# JOIN with explicit aliases. ON instead of USING because USING would
+# only merge customer_code, leaving create_date / modify_date ambiguous.
+_FROM_JOINED = (
+    "secure.customer_dataset AS cd "
+    "LEFT JOIN secure.customer AS c ON c.customer_code = cd.customer_code"
+)
+
+
+# Maps logical column names to their qualified SQL forms. Passed to
+# build_where so WHERE clauses come back qualified. Columns that are
+# only on customer_dataset don't strictly need an entry, but we list
+# all the SORTABLE/FILTERABLE ones explicitly so adding a new column
+# requires updating this in one place.
+_COLUMN_MAP: dict[str, str] = {
+    "rec_id":           "cd.rec_id",
+    "customer_code":    "cd.customer_code",
+    "customer_name":    "c.customer_name",
+    "database_name":    "cd.database_name",
+    "odbc_dataset":     "cd.odbc_dataset",
+    "sg2":              "cd.sg2",
+    "sg2_op":           "cd.sg2_op",
+    "inpatient":        "cd.inpatient",
+    "outpatient":       "cd.outpatient",
+    "ed":               "cd.ed",
+    "claritas_flag":    "cd.claritas_flag",
+    "claritas_state":   "cd.claritas_state",
+    "prism_flag":       "cd.prism_flag",
+    "projection_flag":  "cd.projection_flag",
+    "cms_states":       "cd.cms_states",
+    "transfers_flag":   "cd.transfers_flag",
+    "dataset_type":     "cd.dataset_type",
+    "cell_size_limit":  "cd.cell_size_limit",
+    "export_detail":    "cd.export_detail",
+    "aprdrg_flag":      "cd.aprdrg_flag",
+    "export_flag":      "cd.export_flag",
+    "export_row_limit": "cd.export_row_limit",
+    "webapp_flag":      "cd.webapp_flag",
+    "create_date":      "cd.create_date",
+    "modify_date":      "cd.modify_date",
+}
 
 
 def list_customer_datasets(
@@ -61,7 +111,7 @@ def list_customer_datasets(
     params: dict[str, Any] = {}
 
     if filters:
-        flt_clauses, flt_params = build_where(filters)
+        flt_clauses, flt_params = build_where(filters, column_map=_COLUMN_MAP)
         where_clauses.extend(flt_clauses)
         params.update(flt_params)
 
@@ -69,16 +119,19 @@ def list_customer_datasets(
 
     if sort_by and sort_by in SORTABLE_COLUMNS:
         direction = "ASC" if sort_dir.lower() != "desc" else "DESC"
-        order_sql = f"ORDER BY `{sort_by}` {direction}, rec_id ASC"
+        # Qualify sort column via the same map so e.g. "create_date"
+        # becomes "cd.create_date" instead of an ambiguous bare ref.
+        sort_sql = _COLUMN_MAP.get(sort_by, f"`{sort_by}`")
+        order_sql = f"ORDER BY {sort_sql} {direction}, cd.rec_id ASC"
     else:
-        order_sql = "ORDER BY customer_code ASC, database_name ASC"
+        order_sql = "ORDER BY cd.customer_code ASC, cd.database_name ASC"
 
     offset = (page - 1) * page_size
     params["limit"] = page_size
     params["offset"] = offset
 
     total = int(conn.execute(
-        text(f"SELECT COUNT(*) FROM secure.customer_dataset {where_sql}"),
+        text(f"SELECT COUNT(*) FROM {_FROM_JOINED} {where_sql}"),
         params,
     ).scalar_one())
 
@@ -86,7 +139,7 @@ def list_customer_datasets(
         text(
             f"""
             SELECT {_LIST_COLUMNS}
-            FROM   secure.customer_dataset
+            FROM   {_FROM_JOINED}
             {where_sql}
             {order_sql}
             LIMIT  :limit OFFSET :offset
@@ -102,8 +155,8 @@ def get_customer_dataset(conn: Connection, rec_id: int) -> dict[str, Any] | None
         text(
             f"""
             SELECT {_LIST_COLUMNS}
-            FROM   secure.customer_dataset
-            WHERE  rec_id = :rid
+            FROM   {_FROM_JOINED}
+            WHERE  cd.rec_id = :rid
             LIMIT  1
             """
         ),

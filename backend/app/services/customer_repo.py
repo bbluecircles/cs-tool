@@ -30,6 +30,7 @@ EDITABLE_COLUMNS: tuple[str, ...] = (
     "entity_code",
     "state",
     "customer_desc",
+    "cancelled_date",
     "max_bytes",
     "5_digit_zip",
     "max_row_cnt",

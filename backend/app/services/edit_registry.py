@@ -34,10 +34,11 @@ Scope semantics:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Literal
 
 Scope = Literal["user", "customer", "dataset"]
-ValueKind = Literal["int", "str", "bigint"]
+ValueKind = Literal["int", "str", "bigint", "datetime"]
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,30 @@ class EditableColumn:
                     f"{self.name} must be one of {self.allowed_values}"
                 )
             return v
+
+        if self.kind == "datetime":
+            # Accept YYYY-MM-DD or YYYY-MM-DDTHH:MM[:SS] — the native
+            # <input type="date"> emits the first; legacy/programmatic
+            # callers may send the second. MariaDB coerces both into
+            # DATETIME automatically. Anything else gets rejected.
+            s = str(raw).strip()
+            if not s:
+                if not self.nullable:
+                    raise ValueError(f"{self.name} may not be empty")
+                return None
+            try:
+                # Tolerant ISO parse: replace 'T' with space, then
+                # datetime.fromisoformat handles both date-only and
+                # date+time.
+                _ = datetime.fromisoformat(s.replace(" ", "T"))
+            except ValueError as e:
+                raise ValueError(
+                    f"{self.name} must be an ISO date (YYYY-MM-DD)"
+                ) from e
+            # Return as-is — SQLAlchemy will pass it through and MariaDB
+            # parses it. Keeps the value string so it stays explicit in
+            # logs.
+            return s
 
         # str
         s = str(raw)
@@ -133,6 +158,20 @@ def _varchar(
     )
 
 
+def _datetime(
+    name: str, scope: Scope, table: str,
+    *, column: str | None = None, nullable: bool = True,
+) -> EditableColumn:
+    return EditableColumn(
+        name=name,
+        scope=scope,
+        target_table=table,
+        column=column or name,
+        kind="datetime",
+        nullable=nullable,
+    )
+
+
 _CU = "`secure`.`customer_users`"
 _C  = "`secure`.`customer`"
 _CD = "`secure`.`customer_dataset`"
@@ -181,6 +220,7 @@ _REGISTRY_LIST: tuple[EditableColumn, ...] = (
         name="max_row_cnt", scope="customer", target_table=_C, column="max_row_cnt",
         kind="int", min_value=0, max_value=2_000_000_000, nullable=True,
     ),
+    _datetime("cancelled_date", "customer", _C, nullable=True),
 
     # ----- customer_dataset (dataset-scoped) -----
     _flag   ("sg2",          "dataset", _CD),

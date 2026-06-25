@@ -13,6 +13,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import type { SortingState } from '@tanstack/react-table'
+import clsx from 'clsx'
 
 import { ApiError } from '@/api/client'
 import { useConfig } from '@/api/config'
@@ -27,6 +28,7 @@ import { setHasUnsaved } from '@/lib/unsavedSignal'
 import { ConfirmSaveModal } from './ConfirmSaveModal'
 import { CreateRowModal } from './CreateRowModal'
 import { DeleteConfirmModal } from './DeleteConfirmModal'
+import { EditRowModal } from './EditRowModal'
 import { PaginationFooter } from './PaginationFooter'
 import { ResourceTable } from './ResourceTable'
 import { ResourceToolbar } from './ResourceToolbar'
@@ -55,6 +57,31 @@ export function ResourcePage({ config }: ResourcePageProps) {
   const [saveTarget, setSaveTarget] = useState<Row | null>(null)
   const dirty = useDirtyRows()
 
+  // --- row selection ---
+  // selectedKeys: rows the agent has explicitly checked. Held as a Set
+  // so add/remove are O(1) and rendering selected-state checks are
+  // cheap. Keys are config.rowKey(row) — stable across re-renders.
+  // lastSelectedKey: anchor for shift-click range selection. Set on
+  // every regular click; consulted on shift-click.
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set())
+  const [lastSelectedKey, setLastSelectedKey] = useState<string | null>(null)
+
+  // editTarget: row currently shown in the per-row EditRowModal. The
+  // modal reuses the ResourceConfig field definitions to render
+  // editable fields generically (same shape as create, minus the
+  // primary-key columns).
+  const [editTarget, setEditTarget] = useState<Row | null>(null)
+
+  // Selection is page-scoped. When the agent moves to a different
+  // page, selected rows on the old page are no longer in the visible
+  // `rows` array, so showing a selection toolbar would be misleading.
+  // Simplest fix: clear on page change. (Filter/sort changes are
+  // already handled below — they reset paging which cascades here.)
+  useEffect(() => {
+    setSelectedKeys(new Set())
+    setLastSelectedKey(null)
+  }, [page])
+
   // Reset paging when filters change so we don't sit on page 7 of a
   // freshly-narrowed list.
   useEffect(() => setPage(1), [filters])
@@ -73,6 +100,18 @@ export function ResourcePage({ config }: ResourcePageProps) {
   useEffect(() => {
     setHasUnsaved(dirty.dirtyCount > 0)
     return () => setHasUnsaved(false)
+  }, [dirty.dirtyCount])
+
+  // Clear the post-bulk-save summary the moment the agent edits again —
+  // an "11 saved / 1 failed" banner from 30 seconds ago is misleading
+  // once the dirty count starts changing.
+  useEffect(() => {
+    if (saveAllResult !== null && dirty.dirtyCount > 0) {
+      setSaveAllResult(null)
+    }
+    // Intentionally only depending on dirtyCount: we want this to fire
+    // when the count moves, not when the result itself changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dirty.dirtyCount])
 
   useEffect(() => {
@@ -110,6 +149,21 @@ export function ResourcePage({ config }: ResourcePageProps) {
   // --- save mutation ----
   const [savingRowKey, setSavingRowKey] = useState<string | null>(null)
 
+  // --- bulk save state ----
+  // saveAll runs sequentially, surfacing progress inline. Set when the
+  // agent clicks Save all; null when idle. saveAllResult holds the
+  // post-run summary until the agent makes more changes (then it
+  // clears, since the counts would be misleading).
+  const [saveAllProgress, setSaveAllProgress] = useState<{
+    current: number
+    total: number
+  } | null>(null)
+  const [saveAllResult, setSaveAllResult] = useState<{
+    saved: number
+    failed: number
+    failedKeys: string[]
+  } | null>(null)
+
   const updateM = useMutation({
     mutationFn: async ({
       idPath,
@@ -123,20 +177,84 @@ export function ResourcePage({ config }: ResourcePageProps) {
     },
   })
 
-  async function doSaveRow(row: Row) {
+  /**
+   * Save one row. Returns { ok: true } on success or { ok: false, error }
+   * on failure. Internally mutates dirty (clears the row on success) and
+   * sets savingRowKey for spinner feedback.
+   */
+  async function saveOneRow(row: Row): Promise<{
+    ok: boolean
+    error?: string
+  }> {
     const key = config.rowKey(row)
     const changes = dirty.getDirty(key)
-    if (Object.keys(changes).length === 0) return
+    if (Object.keys(changes).length === 0) return { ok: true }
 
     setSavingRowKey(key)
     try {
       await updateM.mutateAsync({ idPath: config.buildId(row), changes })
       dirty.clearRow(key)
+      return { ok: true }
     } catch (e) {
       console.error('save failed', e)
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
     } finally {
       setSavingRowKey(null)
     }
+  }
+
+  async function doSaveRow(row: Row) {
+    await saveOneRow(row)
+  }
+
+  /**
+   * Save every dirty row, sequentially. Continues past failures so we
+   * always finish the batch — partial success is better than aborting
+   * halfway and leaving the agent unsure of state. Progress updates
+   * happen between rows; the final result lingers until the next edit.
+   */
+  async function doSaveAll() {
+    const dirtyKeys = Object.keys(dirty.dirty)
+    if (dirtyKeys.length === 0) return
+
+    // The dirty map is keyed by config.rowKey(row), but to call the
+    // update endpoint we need actual row objects (for config.buildId
+    // and config.rowKey). Resolve from the current page's rows.
+    const keyToRow = new Map<string, Row>()
+    for (const r of rows) keyToRow.set(config.rowKey(r), r)
+    const targets: Row[] = []
+    const orphanedKeys: string[] = []
+    for (const k of dirtyKeys) {
+      const r = keyToRow.get(k)
+      if (r) targets.push(r)
+      else orphanedKeys.push(k)
+    }
+    // Orphaned dirty keys (changed on a previous page that's no longer
+    // loaded) are counted as failures so they're visible — the agent
+    // can paginate back and save them individually.
+    setSaveAllProgress({ current: 0, total: targets.length })
+    setSaveAllResult(null)
+
+    let saved = 0
+    const failedKeys: string[] = [...orphanedKeys]
+
+    for (let i = 0; i < targets.length; i++) {
+      // Pull the row into a local so TS narrows it from Row|undefined
+      // (under noUncheckedIndexedAccess) to Row. The bound check above
+      // guarantees it's defined.
+      const target = targets[i]!
+      setSaveAllProgress({ current: i + 1, total: targets.length })
+      const result = await saveOneRow(target)
+      if (result.ok) saved += 1
+      else failedKeys.push(config.rowKey(target))
+    }
+
+    setSaveAllProgress(null)
+    setSaveAllResult({
+      saved,
+      failed: failedKeys.length,
+      failedKeys,
+    })
   }
 
   function onSaveRow(row: Row) {
@@ -165,6 +283,131 @@ export function ResourcePage({ config }: ResourcePageProps) {
     } catch (e) {
       console.error('delete failed', e)
     }
+  }
+
+  // --- selection handlers ---
+  /**
+   * Toggle one row's selection state. Clears any in-progress shift
+   * range — agents who click without shift should get a single-pick
+   * behavior, with the click also setting the new anchor.
+   */
+  /**
+   * Replace the entire selection with a specific set of keys. Used by
+   * the header select-all checkbox; bypasses the per-row replace
+   * semantics in onToggleSelect, which is meant for direct row clicks.
+   */
+  function onSetSelection(keys: string[]) {
+    setSelectedKeys(new Set(keys))
+    setLastSelectedKey(keys.length > 0 ? (keys[keys.length - 1] ?? null) : null)
+  }
+
+  /**
+   * Plain click on a row's checkbox.
+   *
+   * Replace semantics: clicking always sets the selection to exactly
+   * this row, regardless of what was selected before. The exception is
+   * clicking a row that's ALREADY the lone selection — that deselects
+   * it (so the agent has a way to "unselect everything" with a click).
+   *
+   * To accumulate selection across rows, use shift+click for a range.
+   * Use the header checkbox to select/deselect everything on the page.
+   */
+  function onToggleSelect(row: Row) {
+    const key = config.rowKey(row)
+    setSelectedKeys((prev) => {
+      // Lone selection of this same row → toggle off.
+      if (prev.size === 1 && prev.has(key)) return new Set()
+      // Otherwise: replace with just this row.
+      return new Set([key])
+    })
+    setLastSelectedKey(key)
+  }
+
+  /**
+   * Shift-click selects every row between the anchor and the clicked
+   * row, inclusive. The range is computed against the currently
+   * visible rows[] (post-sort, post-filter), so it matches what the
+   * agent sees. If there's no anchor yet, falls back to a normal
+   * toggle.
+   */
+  function onShiftSelect(row: Row) {
+    const key = config.rowKey(row)
+    if (!lastSelectedKey || lastSelectedKey === key) {
+      onToggleSelect(row)
+      return
+    }
+    const keys = rows.map((r) => config.rowKey(r))
+    const start = keys.indexOf(lastSelectedKey)
+    const end = keys.indexOf(key)
+    if (start < 0 || end < 0) {
+      // Anchor isn't on the current page. Degrade to a plain toggle.
+      onToggleSelect(row)
+      return
+    }
+    const [lo, hi] = start < end ? [start, end] : [end, start]
+    setSelectedKeys((prev) => {
+      const next = new Set(prev)
+      for (let i = lo; i <= hi; i++) next.add(keys[i]!)
+      return next
+    })
+    setLastSelectedKey(key)
+  }
+
+  function onClearSelection() {
+    setSelectedKeys(new Set())
+    setLastSelectedKey(null)
+  }
+
+  // --- bulk delete ---
+  // Same UX as Save all: sequential, continue past failures, progress
+  // counter + post-batch summary. Only enabled when config.allowDelete.
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState<{
+    current: number
+    total: number
+  } | null>(null)
+  const [bulkDeleteResult, setBulkDeleteResult] = useState<{
+    deleted: number
+    failed: number
+  } | null>(null)
+  // Two-click confirm. Resets if selection changes or any other action
+  // moves through the UI.
+  const [bulkDeleteArmed, setBulkDeleteArmed] = useState(false)
+  useEffect(() => {
+    setBulkDeleteArmed(false)
+    setBulkDeleteResult(null)
+  }, [selectedKeys])
+
+  async function doBulkDelete() {
+    if (!config.allowDelete || selectedKeys.size === 0) return
+    const keyToRow = new Map<string, Row>()
+    for (const r of rows) keyToRow.set(config.rowKey(r), r)
+    const targets: Row[] = []
+    for (const k of selectedKeys) {
+      const r = keyToRow.get(k)
+      if (r) targets.push(r)
+    }
+    if (targets.length === 0) return
+
+    setBulkDeleteProgress({ current: 0, total: targets.length })
+    setBulkDeleteResult(null)
+    let deleted = 0
+    let failed = 0
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i]!
+      setBulkDeleteProgress({ current: i + 1, total: targets.length })
+      try {
+        await deleteM.mutateAsync(target)
+        dirty.clearRow(config.rowKey(target))
+        deleted += 1
+      } catch (e) {
+        console.error('bulk delete failed', e)
+        failed += 1
+      }
+    }
+    setBulkDeleteProgress(null)
+    setBulkDeleteResult({ deleted, failed })
+    setBulkDeleteArmed(false)
+    onClearSelection()
   }
 
   // --- render ----
@@ -197,15 +440,107 @@ export function ResourcePage({ config }: ResourcePageProps) {
         isFetching={q.isFetching}
       />
 
-      {dirty.dirtyCount > 0 && (
-        <div className="rounded-md border border-warning-600/30 bg-warning-100 px-3 py-2 text-sm text-gray-900">
-          {dirty.dirtyCount} unsaved change{dirty.dirtyCount === 1 ? '' : 's'}{' '}
-          across {Object.keys(dirty.dirty).length} row
-          {Object.keys(dirty.dirty).length === 1 ? '' : 's'}. Use the{' '}
-          <span className="font-medium">Save</span> button on each row to
-          apply.
+      {/* Unsaved-changes / save-all banner. Shows in three flavors:
+            1. Idle with dirty rows  → counts + "Save all changes" button
+            2. Mid-batch save        → "Saving 3 of 12..."
+            3. Post-batch summary    → "11 saved, 1 failed" (until next edit)
+          We keep this all in one slot so the layout doesn't jump. */}
+      {saveAllProgress !== null ? (
+        <div className="rounded-md border border-secondary-500/40 bg-secondary-100/40 px-3 py-2 text-sm text-gray-900">
+          Saving {saveAllProgress.current} of {saveAllProgress.total}…
         </div>
-      )}
+      ) : saveAllResult !== null ? (
+        <div
+          className={clsx(
+            'rounded-md border px-3 py-2 text-sm text-gray-900',
+            saveAllResult.failed === 0
+              ? 'border-secondary-500/40 bg-secondary-100/40'
+              : 'border-error-600/40 bg-error-100/40',
+          )}
+        >
+          {saveAllResult.failed === 0
+            ? `Saved ${saveAllResult.saved} row${saveAllResult.saved === 1 ? '' : 's'}.`
+            : `${saveAllResult.saved} saved, ${saveAllResult.failed} failed. The failed rows are still marked dirty — try saving them individually for the error detail.`}
+        </div>
+      ) : dirty.dirtyCount > 0 ? (
+        <div className="flex items-center gap-3 rounded-md border border-warning-600/30 bg-warning-100 px-3 py-2 text-sm text-gray-900">
+          <span className="flex-1">
+            {dirty.dirtyCount} unsaved change
+            {dirty.dirtyCount === 1 ? '' : 's'} across{' '}
+            {Object.keys(dirty.dirty).length} row
+            {Object.keys(dirty.dirty).length === 1 ? '' : 's'}.
+          </span>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => void doSaveAll()}
+          >
+            Save all changes
+          </button>
+        </div>
+      ) : null}
+
+      {/* Selection toolbar: appears whenever ≥1 row is selected. The
+          three banners (save-all-progress, save-all-result, this one)
+          can stack: agent could be mid-bulk-save with a fresh selection,
+          or seeing a success summary while selecting more rows. That's
+          fine — each slot owns its own row in the layout. */}
+      {bulkDeleteProgress !== null ? (
+        <div className="rounded-md border border-secondary-500/40 bg-secondary-100/40 px-3 py-2 text-sm text-gray-900">
+          Deleting {bulkDeleteProgress.current} of {bulkDeleteProgress.total}…
+        </div>
+      ) : bulkDeleteResult !== null ? (
+        <div
+          className={clsx(
+            'rounded-md border px-3 py-2 text-sm text-gray-900',
+            bulkDeleteResult.failed === 0
+              ? 'border-secondary-500/40 bg-secondary-100/40'
+              : 'border-error-600/40 bg-error-100/40',
+          )}
+        >
+          {bulkDeleteResult.failed === 0
+            ? `Deleted ${bulkDeleteResult.deleted} row${bulkDeleteResult.deleted === 1 ? '' : 's'}.`
+            : `${bulkDeleteResult.deleted} deleted, ${bulkDeleteResult.failed} failed.`}
+        </div>
+      ) : selectedKeys.size > 0 ? (
+        <div className="flex items-center gap-3 rounded-md border border-secondary-500/40 bg-secondary-100/40 px-3 py-2 text-sm text-gray-900">
+          <span className="flex-1">
+            {selectedKeys.size} row{selectedKeys.size === 1 ? '' : 's'} selected
+          </span>
+          {config.allowDelete && (
+            <button
+              type="button"
+              className={clsx(
+                'rounded-md px-3 py-1 text-sm font-medium',
+                bulkDeleteArmed
+                  ? 'bg-error-600 text-white hover:bg-error-600/90'
+                  : 'border border-error-600/40 text-error-600 hover:bg-error-100',
+              )}
+              onClick={() => {
+                if (!bulkDeleteArmed) {
+                  setBulkDeleteArmed(true)
+                  return
+                }
+                void doBulkDelete()
+              }}
+              disabled={deleteM.isPending}
+            >
+              {deleteM.isPending
+                ? 'Deleting…'
+                : bulkDeleteArmed
+                  ? 'Click again to confirm'
+                  : `Delete selected`}
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={onClearSelection}
+          >
+            Clear
+          </button>
+        </div>
+      ) : null}
 
       <ResourceTable
         config={config}
@@ -224,6 +559,11 @@ export function ResourcePage({ config }: ResourcePageProps) {
           config.allowDelete ? (row) => setDeleteTarget(row) : undefined
         }
         savingRowKey={savingRowKey}
+        selectedKeys={selectedKeys}
+        onToggleSelect={onToggleSelect}
+        onSetSelection={onSetSelection}
+        onShiftSelect={onShiftSelect}
+        onOpenEditModal={(row) => setEditTarget(row)}
       />
 
       <PaginationFooter
@@ -249,10 +589,13 @@ export function ResourcePage({ config }: ResourcePageProps) {
         <DeleteConfirmModal
           slug={config.slug}
           recId={Number(deleteTarget.rec_id)}
-          entityLabel={deleteEntityLabel(config.slug)}
-          rowDescription={deleteRowDescription(config.slug, deleteTarget)}
-          tableName={deleteTableName(config.slug)}
+          entityLabel={config.deleteEntityLabel ?? 'this row'}
+          tableName={config.deleteTableName ?? config.slug}
           impactKind={config.deleteImpactKind ?? 'none'}
+          rowDescription={
+            `${deleteTarget.database_name ?? 'dataset'} ` +
+            `(customer ${deleteTarget.customer_code})`
+          }
           onClose={() => setDeleteTarget(null)}
           onConfirm={confirmDelete}
           isDeleting={deleteM.isPending}
@@ -273,43 +616,15 @@ export function ResourcePage({ config }: ResourcePageProps) {
           isSaving={updateM.isPending}
         />
       )}
+
+      {editTarget && (
+        <EditRowModal
+          config={config}
+          row={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={() => setEditTarget(null)}
+        />
+      )}
     </div>
   )
-}
-
-// ---------------------------------------------------------------------------
-// Per-resource delete copy.
-//
-// These exist because the row description is the one piece of delete UX
-// that can't be generic — it needs to surface the row's identifying fields
-// in human language. Keeping them inline here (rather than on the config)
-// because they touch row-shape, which is closer to the page than the
-// config registry.
-// ---------------------------------------------------------------------------
-
-function deleteEntityLabel(slug: string): string {
-  switch (slug) {
-    case 'customer-datasets': return 'this dataset'
-    case 'ppi-datasets':      return 'this PPI row'
-    default:                  return 'this row'
-  }
-}
-
-function deleteTableName(slug: string): string {
-  switch (slug) {
-    case 'customer-datasets': return 'secure.customer_dataset'
-    case 'ppi-datasets':      return 'secure.ppi_dataset'
-    default:                  return ''
-  }
-}
-
-function deleteRowDescription(slug: string, row: Row): string {
-  switch (slug) {
-    case 'customer-datasets':
-      return `${row.database_name ?? 'dataset'} (customer ${row.customer_code})`
-    case 'ppi-datasets':
-      return `${row.ppi_state ?? 'PPI row'} (customer ${row.customer_code})`
-    default:
-      return `row ${row.rec_id ?? ''}`
-  }
 }

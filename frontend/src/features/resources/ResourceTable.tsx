@@ -13,7 +13,7 @@
  * cell and a blank filter cell so the columns align — without the spacer
  * the data column would shift left under the actions column.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import {
   ColumnDef,
   flexRender,
@@ -23,12 +23,6 @@ import {
 } from '@tanstack/react-table'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-
-// DEPLOYMENT MARKER — if you see this log in DevTools console when the
-// app loads, v20 (no sort removal) is running. Two-state cycle: clicking
-// a header toggles asc <-> desc; the third "clear sort" step is disabled.
-// eslint-disable-next-line no-console
-console.log('[ResourceTable] v20 loaded — two-state sort (asc/desc only)')
 import type { ResourceFilter } from '@/api/resources'
 import { fetchDbDatabases, listResource } from '@/api/resources'
 import type { ResourceConfig } from './resourceConfigs'
@@ -44,6 +38,10 @@ import { PasswordCell } from './PasswordCell'
 import type { UseDirtyRows } from './useDirtyRows'
 
 type Row = Record<string, unknown>
+
+// Reused empty set so the default prop doesn't allocate a new Set on
+// every render — keeps referential identity stable for memo deps.
+const EMPTY_SET: Set<string> = new Set()
 
 interface ResourceTableProps {
   config: ResourceConfig
@@ -63,6 +61,22 @@ interface ResourceTableProps {
   onDiscardRow: (row: Row) => void
   onDeleteRow?: (row: Row) => void
   savingRowKey: string | null
+  /** Row keys (config.rowKey(row)) currently selected. Optional —
+   *  callers that don't care about selection can omit it. */
+  selectedKeys?: Set<string>
+  /** Plain click on a row's checkbox — by spec, replaces selection
+   *  with just this row (or clears if it was the lone selection). */
+  onToggleSelect?: (row: Row) => void
+  /** Bulk-set the selection to an exact list of keys. Used by the
+   *  header select-all checkbox, which needs to set multiple rows at
+   *  once without going through the per-row replace semantics. */
+  onSetSelection?: (keys: string[]) => void
+  /** Shift-click on a row's checkbox — range select from the previous
+   *  anchor to this row, inclusive (additive to existing selection). */
+  onShiftSelect?: (row: Row) => void
+  /** Double-click on the row body (excluding the checkbox cell) — opens
+   *  the per-row edit modal. */
+  onOpenEditModal?: (row: Row) => void
 }
 
 export function ResourceTable({
@@ -80,6 +94,14 @@ export function ResourceTable({
   onDiscardRow,
   onDeleteRow,
   savingRowKey,
+  // Defaults so this table doesn't crash if a caller forgets to wire
+  // selection. The selection toolbar and edit-modal trigger simply
+  // become no-ops in that case.
+  selectedKeys = EMPTY_SET,
+  onToggleSelect,
+  onSetSelection,
+  onShiftSelect,
+  onOpenEditModal,
 }: ResourceTableProps) {
   const visibleConfigCols = useMemo(
     () => config.columns.filter((c) => c.show !== false),
@@ -189,7 +211,10 @@ export function ResourceTable({
             // customer_code cells: resolve the bare integer to the
             // customer_name via the shared CustomerPicker cache. Falls
             // back to the code itself if the cache hasn't loaded yet.
-            if (col.kind === 'customer_code') {
+            // Skip the substitution when the column opts out via
+            // displayRaw — used on tables that have both a "Code"
+            // column (raw) and a separate "Customer" column (name).
+            if (col.kind === 'customer_code' && !col.displayRaw) {
               const code = rowObj[col.key]
               const codeNum = typeof code === 'number' ? code : Number(code)
               if (Number.isFinite(codeNum)) {
@@ -353,6 +378,20 @@ export function ResourceTable({
             {/* Row 1: column labels + sort indicators */}
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
+                {/* Checkbox header — header-checkbox toggles select-all
+                    for the current page. Indeterminate when some but
+                    not all are selected. */}
+                <th
+                  scope="col"
+                  className="bg-table-header w-8 px-2 py-2 border-b border-border"
+                >
+                  <SelectAllCheckbox
+                    rows={rows}
+                    rowKey={config.rowKey}
+                    selectedKeys={selectedKeys}
+                    onSetSelection={onSetSelection}
+                  />
+                </th>
                 {hg.headers.map((h) => {
                   const canSort = h.column.getCanSort()
                   const sort = h.column.getIsSorted()
@@ -392,6 +431,11 @@ export function ResourceTable({
 
             {/* Row 2: per-column filter inputs */}
             <tr>
+              {/* spacer for the checkbox column */}
+              <th
+                key="flt-__select"
+                className="bg-primary-100/30 px-2 py-1 border-b border-border w-8"
+              />
               {visibleConfigCols.map((col) => (
                 <th
                   key={`flt-${col.key}`}
@@ -413,18 +457,18 @@ export function ResourceTable({
           </thead>
           <tbody>
             {isLoading && rows.length === 0 && (
-              <LoadingRow columnCount={columns.length} />
+              <LoadingRow columnCount={columns.length + 1} />
             )}
             {isError && (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-8 text-center text-sm text-error-600">
+                <td colSpan={columns.length + 1} className="px-4 py-8 text-center text-sm text-error-600">
                   {errorMessage ?? 'Failed to load.'}
                 </td>
               </tr>
             )}
             {!isLoading && !isError && rows.length === 0 && (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-10 text-center text-sm text-gray-500">
+                <td colSpan={columns.length + 1} className="px-4 py-10 text-center text-sm text-gray-500">
                   No rows match the current filters.
                 </td>
               </tr>
@@ -435,6 +479,7 @@ export function ResourceTable({
               const rowIsDisabled =
                 (row.original as Row).disable === 1 ||
                 (row.original as Row).disable === '1'
+              const isSelected = selectedKeys.has(key)
               return (
                 <tr
                   key={row.id}
@@ -443,8 +488,73 @@ export function ResourceTable({
                     idx % 2 === 1 && 'bg-table-row-alt',
                     rowIsDisabled && 'text-gray-500',
                     rowHasDirty && 'bg-warning-100/40 hover:bg-warning-100/60',
+                    // Selection visual: stronger tint that's obvious at
+                    // a glance, plus a left-edge accent stripe via the
+                    // checkbox cell (set below). This wins over the
+                    // zebra/dirty tints so mixed-state rows still read
+                    // as "selected" first. Uses secondary-300 at 30%
+                    // opacity (since the palette only has 100, 300,
+                    // 500, 700, 900 — there's no 200 / 600).
+                    isSelected && 'bg-secondary-300/30 hover:bg-secondary-300/45',
                   )}
+                  onDoubleClick={(e) => {
+                    if (!onOpenEditModal) return
+                    // Skip if the double-click started in an
+                    // interactive control — agents double-clicking
+                    // inside a text cell to select a word shouldn't
+                    // trigger the edit modal.
+                    const target = e.target as HTMLElement
+                    if (
+                      target.closest('input, select, textarea, button, a')
+                    ) {
+                      return
+                    }
+                    onOpenEditModal(row.original as Row)
+                  }}
                 >
+                  {/* Selection checkbox cell. Click toggles; shift-
+                      click range-selects from the previous anchor.
+                      When the row is selected, this cell also paints
+                      a left-edge accent stripe so the row pops out
+                      even with cursory scanning. */}
+                  <td
+                    className={clsx(
+                      'px-2 py-1.5 border-b border-divider w-8 relative',
+                      isSelected &&
+                        "before:content-[''] before:absolute before:left-0 before:top-0 before:bottom-0 before:w-[3px] before:bg-secondary-500",
+                    )}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="checkbox"
+                      className={clsx(
+                        'h-4 w-4 cursor-pointer rounded',
+                        'border border-gray-300 bg-white',
+                        'appearance-none align-middle relative',
+                        // Checked state: solid secondary fill + white check.
+                        'checked:bg-secondary-500 checked:border-secondary-500',
+                        // Inline SVG checkmark for the checked state. Tailwind
+                        // arbitrary value — kept in className to avoid a
+                        // global CSS rule for this one component.
+                        "checked:after:content-[''] checked:after:absolute",
+                        'checked:after:inset-0 checked:after:bg-no-repeat checked:after:bg-center',
+                        "checked:after:bg-[url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='3.5 8.5 7 12 13 5'/></svg>\")]",
+                        'hover:border-secondary-500 hover:ring-1 hover:ring-secondary-500/30',
+                        'focus:outline-none focus:ring-2 focus:ring-secondary-500/40',
+                        'transition-colors',
+                      )}
+                      checked={isSelected}
+                      onChange={() => {}}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (e.shiftKey) {
+                          onShiftSelect?.(row.original as Row)
+                        } else {
+                          onToggleSelect?.(row.original as Row)
+                        }
+                      }}
+                    />
+                  </td>
                   {row.getVisibleCells().map((cell) => (
                     <td
                       key={cell.id}
@@ -493,6 +603,71 @@ function LoadingRow({ columnCount }: { columnCount: number }) {
         </tr>
       ))}
     </>
+  )
+}
+
+function SelectAllCheckbox({
+  rows,
+  rowKey,
+  selectedKeys,
+  onSetSelection,
+}: {
+  rows: Row[]
+  rowKey: (r: Row) => string
+  selectedKeys: Set<string>
+  onSetSelection?: (keys: string[]) => void
+}) {
+  // Three states: none selected, all selected, or some selected
+  // (indeterminate). Indeterminate is set imperatively via ref since
+  // it's not a controllable prop on <input>.
+  const ref = useRef<HTMLInputElement | null>(null)
+  const visibleSelected = rows.filter((r) => selectedKeys.has(rowKey(r))).length
+  const all = rows.length > 0 && visibleSelected === rows.length
+  const some = visibleSelected > 0 && visibleSelected < rows.length
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = some
+  }, [some])
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className={clsx(
+        'h-4 w-4 cursor-pointer rounded',
+        'border border-gray-300 bg-white',
+        'appearance-none align-middle relative',
+        'checked:bg-secondary-500 checked:border-secondary-500',
+        "checked:after:content-[''] checked:after:absolute",
+        'checked:after:inset-0 checked:after:bg-no-repeat checked:after:bg-center',
+        "checked:after:bg-[url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='3.5 8.5 7 12 13 5'/></svg>\")]",
+        // Indeterminate state: secondary fill + a horizontal dash.
+        'indeterminate:bg-secondary-500 indeterminate:border-secondary-500',
+        "indeterminate:after:content-[''] indeterminate:after:absolute",
+        'indeterminate:after:left-[3px] indeterminate:after:right-[3px]',
+        'indeterminate:after:top-1/2 indeterminate:after:-translate-y-1/2',
+        'indeterminate:after:h-[2px] indeterminate:after:bg-white',
+        'indeterminate:after:rounded-full',
+        'hover:border-secondary-500 hover:ring-1 hover:ring-secondary-500/30',
+        'focus:outline-none focus:ring-2 focus:ring-secondary-500/40',
+        'transition-colors',
+        !onSetSelection && 'opacity-50 cursor-not-allowed',
+      )}
+      checked={all}
+      disabled={!onSetSelection}
+      onChange={() => {}}
+      onClick={(e) => {
+        e.stopPropagation()
+        if (!onSetSelection) return
+        // If everything's selected, clear. Otherwise select every
+        // visible row on this page in one shot. onSetSelection
+        // bypasses the per-click "replace with just this row"
+        // semantics on row checkboxes.
+        if (all) {
+          onSetSelection([])
+        } else {
+          onSetSelection(rows.map((r) => rowKey(r)))
+        }
+      }}
+    />
   )
 }
 

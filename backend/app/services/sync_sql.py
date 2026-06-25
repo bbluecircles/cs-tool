@@ -438,13 +438,20 @@ def grants_for_customer(conn: Connection, customer_code: int) -> int:
 # ---------------------------------------------------------------------------
 # Revokes — the inverse of grants_for_customer.
 #
-# Strips all privileges from every active MariaDB user under a customer
-# but leaves the user accounts in place. Run grants on the same customer
-# afterwards puts everything back. Symmetric.
+# For each active MariaDB user under a customer, we run:
+#   1. REVOKE ALL PRIVILEGES, GRANT OPTION FROM '<user>'@'%'
+#   2. DROP USER '<user>'@'%'
 #
-# We deliberately do NOT DROP USER here: that's destructive and not the
-# inverse of GRANT — it's the inverse of CREATE USER. If you want to
-# fully delete users that's a separate operation.
+# The REVOKE is technically redundant before a DROP — DROP cleans up
+# everything — but it makes the audit trail explicit, which is useful
+# for compliance review. It's also defensive: if DROP fails for any
+# reason (e.g. open connections holding the account), the REVOKE has
+# already neutralized the account's access.
+#
+# Run grants on the same customer afterwards puts everything back: the
+# grants generator uses CREATE USER IF NOT EXISTS, so re-creation is
+# automatic as long as secure.user_details_internal_2026 still has the
+# row (which it does — that's the source of truth, not mysql.user).
 # ---------------------------------------------------------------------------
 
 _REVOKE_GENERATOR = """
@@ -454,23 +461,38 @@ _REVOKE_GENERATOR = """
     GROUP BY user_id
 """
 
+_DROP_USER_GENERATOR = """
+    SELECT CONCAT('DROP USER IF EXISTS `', user_id, '`@`%`;')
+    FROM   myuser.user_details_2026
+    WHERE  `disable` = 0 AND customer_code = :cc
+    GROUP BY user_id
+"""
+
 
 def _collect_revokes(conn: Connection, customer_code: int) -> list[str]:
+    """Collect REVOKE + DROP USER statements for every active user.
+
+    Ordering matters: REVOKE first, then DROP. The list is returned
+    as: [REVOKE u1, REVOKE u2, ..., DROP u1, DROP u2, ...].
+    """
     stmts: list[str] = []
-    rows = conn.execute(text(_REVOKE_GENERATOR), {"cc": customer_code}).all()
-    for row in rows:
-        stmt = row[0]
-        if stmt:
-            stmts.append(stmt)
+    for generator in (_REVOKE_GENERATOR, _DROP_USER_GENERATOR):
+        rows = conn.execute(text(generator), {"cc": customer_code}).all()
+        for row in rows:
+            stmt = row[0]
+            if stmt:
+                stmts.append(stmt)
     return stmts
 
 
 def revokes_for_customer(conn: Connection, customer_code: int) -> int:
-    """Run REVOKE ALL PRIVILEGES for every active user under a customer.
+    """Strip access AND remove MariaDB accounts for every active user
+    under a customer.
 
-    Returns count of executed statements. Individual failures are logged
-    but don't abort the rest — REVOKE failing on a user that has no
-    privileges (e.g. never had grants run) is harmless and expected.
+    Returns count of executed statements. Individual failures are
+    logged but don't abort the rest — REVOKE failing on a user that
+    has no privileges is harmless; DROP USER failing on a non-existent
+    account (because of IF EXISTS) just no-ops.
     """
     stmts = _collect_revokes(conn, customer_code)
     ok = 0
@@ -479,7 +501,7 @@ def revokes_for_customer(conn: Connection, customer_code: int) -> int:
             conn.execute(text(stmt))
             ok += 1
         except Exception as e:
-            log.warning("revoke failed (%s): %s", stmt[:80], e)
+            log.warning("revoke/drop failed (%s): %s", stmt[:80], e)
     log.info(
         "revokes_for_customer(%s): %d/%d ok", customer_code, ok, len(stmts)
     )

@@ -121,6 +121,13 @@ export interface ColumnDef {
    * databases). Used on the Claim Databases create form.
    */
   pickerRequireNoDischargeFeatures?: boolean
+  /**
+   * For kind: 'customer_code' read-only cells: when true, render the
+   * bare integer instead of the substituted customer_name. Used when
+   * a table has BOTH a separate "Code" column (raw) and a "Customer"
+   * column (name) — Discharge and Claim tables show this pair.
+   */
+  displayRaw?: boolean
 }
 
 export interface ResourceConfig {
@@ -150,6 +157,13 @@ export interface ResourceConfig {
    *                         no per-row downstream fanout (e.g. PPI).
    */
   deleteImpactKind?: 'customer_dataset' | 'none'
+  /** Short human-readable label for the entity in delete confirms,
+   *  e.g. "this dataset", "this PPI row". Falls back to "this row". */
+  deleteEntityLabel?: string
+  /** Backing SQL table name (e.g. "secure.customer_dataset") shown in
+   *  the delete confirm to make the action concrete. Falls back to
+   *  config.slug. */
+  deleteTableName?: string
 }
 
 /**
@@ -211,8 +225,12 @@ function readonly(
   }
 }
 
-function datetime(key: string, label: string): ColumnDef {
-  return { key, label, kind: 'datetime', editable: false, show: true }
+function datetime(
+  key: string,
+  label: string,
+  opts: Partial<ColumnDef> = {},
+): ColumnDef {
+  return { key, label, kind: 'datetime', editable: false, show: true, ...opts }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +309,7 @@ export const customersConfig: ResourceConfig = {
     },
     datetime('create_date', 'Created'),
     datetime('modify_date', 'Modified'),
-    datetime('cancelled_date', 'Cancelled'),
+    datetime('cancelled_date', 'Cancelled', { editable: true }),
   ],
 }
 
@@ -413,7 +431,7 @@ export const customerDatasetsConfig: ResourceConfig = {
   rowKey: (r) => `cd-${r.rec_id}`,
   primaryKeyColumns: ['rec_id'],
   sortableColumns: new Set([
-    'rec_id', 'customer_code', 'database_name',
+    'rec_id', 'customer_code', 'customer_name', 'database_name',
     'inpatient', 'outpatient', 'ed',
     'aprdrg_flag',
     'create_date', 'modify_date',
@@ -421,11 +439,25 @@ export const customerDatasetsConfig: ResourceConfig = {
   filterByCustomerCode: true,
   allowDelete: true,
   deleteImpactKind: 'customer_dataset',
+  deleteEntityLabel: 'this discharge dataset',
+  deleteTableName: 'secure.customer_dataset',
   columns: [
     readonly('rec_id', 'Rec ID', { show: false }),
     {
-      key: 'customer_code', label: 'Customer', kind: 'customer_code',
+      // Customer code: bare integer, filterable by exact match. The
+      // create form still uses this column as the FK picker.
+      // Filter is `int` so the agent can type a code rather than
+      // pulling up the full customer dropdown.
+      key: 'customer_code', label: 'Code', kind: 'customer_code',
       editable: false, showInCreate: true, requiredOnCreate: true,
+      displayRaw: true,
+      filterKind: 'int',
+    },
+    {
+      // Customer name: projected from secure.customer via JOIN in
+      // customer_dataset_repo. Filterable by substring (contains).
+      key: 'customer_name', label: 'Customer', kind: 'text',
+      editable: false, showInCreate: false,
     },
     {
       // Hidden from the table AND the create form per UX spec. The
@@ -509,7 +541,7 @@ export const ppiDatasetsConfig: ResourceConfig = {
   rowKey: (r) => `p-${r.rec_id}`,
   primaryKeyColumns: ['rec_id'],
   sortableColumns: new Set([
-    'rec_id', 'customer_code', 'ppi_state',
+    'rec_id', 'customer_code', 'customer_name', 'ppi_state',
     'create_date', 'modify_date',
   ]),
   filterByCustomerCode: true,
@@ -517,11 +549,24 @@ export const ppiDatasetsConfig: ResourceConfig = {
   // PPI rows aren't joined to individual users, so there's no
   // delete-impact preview to fetch.
   deleteImpactKind: 'none',
+  deleteEntityLabel: 'this PPI row',
+  deleteTableName: 'secure.ppi_dataset',
   columns: [
     readonly('rec_id', 'Rec ID', { show: false }),
     {
-      key: 'customer_code', label: 'Customer', kind: 'customer_code',
+      // Customer code: bare integer, filterable by exact match.
+      // Filter is `int` so agents can type a code instead of pulling
+      // up the full customer dropdown.
+      key: 'customer_code', label: 'Code', kind: 'customer_code',
       editable: false, showInCreate: true, requiredOnCreate: true,
+      displayRaw: true,
+      filterKind: 'int',
+    },
+    {
+      // Customer name: projected from secure.customer via JOIN in
+      // ppi_dataset_repo. Filterable by substring.
+      key: 'customer_name', label: 'Customer', kind: 'text',
+      editable: false, showInCreate: false,
     },
     {
       // Claims-only database, picked from myuser.db_database (filtered to

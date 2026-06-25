@@ -108,9 +108,10 @@ function SyncCard() {
             </div>
           </div>
           <div className="mt-1 text-[11px] text-gray-500">
-            Executes REVOKE ALL PRIVILEGES for every active user of the
-            chosen customer. User accounts stay in place but
-            lose all database access until Run grants is executed again.
+            Strips privileges (REVOKE) and removes the MariaDB user
+            accounts (DROP USER) for every active user of the chosen
+            customer. Run grants on the same customer afterwards
+            recreates them from secure.user_details_internal_2026.
           </div>
           <div className="mt-3">
             <button

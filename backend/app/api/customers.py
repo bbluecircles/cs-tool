@@ -46,7 +46,7 @@ def _client_ip(request: Request) -> str:
 def list_customers(
     _: Annotated[CurrentAgent, Depends(get_current_agent)],
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
+    page_size: int = Query(default=50, ge=1, le=5000),
     sort_by: str | None = Query(default=None, max_length=32),
     sort_dir: Literal["asc", "desc"] = "asc",
     # FastAPI binds repeated `?filter=...` query params into a list.
@@ -159,7 +159,8 @@ def update_customer(
         audit.record(
             conn,
             user_id=agent.user_id,
-            action="customer.update",
+            action="customer.updat" \
+            "e",
             entity_type="secure.customer",
             entity_key=str(customer_code),
             before={k: before.get(k) for k in payload.changes.keys()},

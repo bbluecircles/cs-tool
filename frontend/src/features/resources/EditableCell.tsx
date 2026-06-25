@@ -103,12 +103,62 @@ function EditingInput({
       />
     )
   }
+  // Datetime cells (used for cancelled_date on customers). Native
+  // date input — produces YYYY-MM-DD strings, which MariaDB happily
+  // coerces to DATETIME. Allows clearing to null by emptying the field
+  // and clicking away.
+  if (column.kind === 'datetime') {
+    return (
+      <DateInput
+        initial={initial}
+        onCommit={onCommit}
+        onCancel={onCancel}
+      />
+    )
+  }
   return (
     <TextLikeInput
       column={column}
       initial={initial}
       onCommit={onCommit}
       onCancel={onCancel}
+    />
+  )
+}
+
+function DateInput({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: unknown
+  onCommit: (v: unknown) => void
+  onCancel: () => void
+}) {
+  // Native <input type="date"> expects YYYY-MM-DD. The backend may
+  // return ISO timestamps like "2026-06-10T00:00:00" — slice to just
+  // the date portion for the input. On commit we send the raw string;
+  // the edit_registry coerces it on the backend side.
+  const initialDate =
+    typeof initial === 'string' && initial.length >= 10
+      ? initial.slice(0, 10)
+      : ''
+  const [value, setValue] = useState(initialDate)
+  return (
+    <input
+      type="date"
+      autoFocus
+      className="input py-0.5 px-1 text-xs w-auto"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => onCommit(value === '' ? null : value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') onCommit(value === '' ? null : value)
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          onCancel()
+        }
+      }}
     />
   )
 }

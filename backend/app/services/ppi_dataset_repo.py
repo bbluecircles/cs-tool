@@ -1,7 +1,7 @@
 """Repository for secure.ppi_dataset.
 
 Primary key: rec_id (autoincrement).
-Edit/Create/Delete all allowed.
+Edit/Create allowed. Delete NOT allowed.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ EDITABLE_COLUMNS: tuple[str, ...] = (
 )
 
 SORTABLE_COLUMNS: frozenset[str] = frozenset({
-    "rec_id", "customer_code", "ppi_state",
+    "rec_id", "customer_code", "customer_name", "ppi_state",
     "ppi_detail", "ppi_summary",
     "cell_size_limit", "export_detail",
     "create_date", "modify_date",
@@ -28,9 +28,33 @@ SORTABLE_COLUMNS: frozenset[str] = frozenset({
 FILTERABLE_COLUMNS: frozenset[str] = SORTABLE_COLUMNS
 
 _LIST_COLUMNS = """
-    rec_id, customer_code, ppi_state, ppi_detail, ppi_summary,
-    cell_size_limit, export_detail, create_date, modify_date
+    p.rec_id, p.customer_code, c.customer_name AS customer_name,
+    p.ppi_state, p.ppi_detail, p.ppi_summary,
+    p.cell_size_limit, p.export_detail,
+    p.create_date, p.modify_date
 """.strip()
+
+# JOIN with aliases — secure.customer has create_date / modify_date
+# columns that would collide with secure.ppi_dataset under USING.
+_FROM_JOINED = (
+    "secure.ppi_dataset AS p "
+    "LEFT JOIN secure.customer AS c ON c.customer_code = p.customer_code"
+)
+
+# Map filter / sort column names to qualified SQL. See
+# customer_dataset_repo._COLUMN_MAP for rationale.
+_COLUMN_MAP: dict[str, str] = {
+    "rec_id":          "p.rec_id",
+    "customer_code":   "p.customer_code",
+    "customer_name":   "c.customer_name",
+    "ppi_state":       "p.ppi_state",
+    "ppi_detail":      "p.ppi_detail",
+    "ppi_summary":     "p.ppi_summary",
+    "cell_size_limit": "p.cell_size_limit",
+    "export_detail":   "p.export_detail",
+    "create_date":     "p.create_date",
+    "modify_date":     "p.modify_date",
+}
 
 
 def list_ppi_datasets(
@@ -46,7 +70,7 @@ def list_ppi_datasets(
     params: dict[str, Any] = {}
 
     if filters:
-        flt_clauses, flt_params = build_where(filters)
+        flt_clauses, flt_params = build_where(filters, column_map=_COLUMN_MAP)
         where_clauses.extend(flt_clauses)
         params.update(flt_params)
 
@@ -54,23 +78,24 @@ def list_ppi_datasets(
 
     if sort_by and sort_by in SORTABLE_COLUMNS:
         direction = "ASC" if sort_dir.lower() != "desc" else "DESC"
-        order_sql = f"ORDER BY `{sort_by}` {direction}, rec_id ASC"
+        sort_sql = _COLUMN_MAP.get(sort_by, f"`{sort_by}`")
+        order_sql = f"ORDER BY {sort_sql} {direction}, p.rec_id ASC"
     else:
-        order_sql = "ORDER BY customer_code ASC, ppi_state ASC"
+        order_sql = "ORDER BY p.customer_code ASC, p.ppi_state ASC"
 
     offset = (page - 1) * page_size
     params["limit"] = page_size
     params["offset"] = offset
 
     total = int(conn.execute(
-        text(f"SELECT COUNT(*) FROM secure.ppi_dataset {where_sql}"), params
+        text(f"SELECT COUNT(*) FROM {_FROM_JOINED} {where_sql}"), params
     ).scalar_one())
 
     rows = [dict(r) for r in conn.execute(
         text(
             f"""
             SELECT {_LIST_COLUMNS}
-            FROM   secure.ppi_dataset
+            FROM   {_FROM_JOINED}
             {where_sql}
             {order_sql}
             LIMIT  :limit OFFSET :offset
@@ -86,8 +111,8 @@ def get_ppi_dataset(conn: Connection, rec_id: int) -> dict[str, Any] | None:
         text(
             f"""
             SELECT {_LIST_COLUMNS}
-            FROM   secure.ppi_dataset
-            WHERE  rec_id = :rid
+            FROM   {_FROM_JOINED}
+            WHERE  p.rec_id = :rid
             LIMIT  1
             """
         ),
@@ -143,18 +168,3 @@ def update_ppi_dataset(
         ),
         params,
     )
-
-
-def delete_ppi_dataset(conn: Connection, rec_id: int) -> int:
-    """Hard delete. Returns 1 if a row was deleted, 0 otherwise.
-
-    PPI rows aren't joined to individual users the way customer_dataset
-    rows are, so there's no per-row user-fanout to warn about. Customer-
-    level PPI access is gated by the ``ppiuser`` flag on customer_users,
-    which is unaffected by deleting a row here.
-    """
-    result = conn.execute(
-        text("DELETE FROM secure.ppi_dataset WHERE rec_id = :rid"),
-        {"rid": rec_id},
-    )
-    return result.rowcount

@@ -106,18 +106,32 @@ def build_where(
     filters: list[ParsedFilter],
     *,
     param_offset: int = 0,
+    column_map: dict[str, str] | None = None,
 ) -> tuple[list[str], dict[str, Any]]:
     """Translate parsed filters into (clauses, bind_params).
 
     Caller joins clauses with ' AND ' and merges bind_params into their
     existing param dict. param_offset lets the caller avoid bind-name
     collisions if they already have :search_0 etc. in flight.
+
+    column_map lets callers map filter names to qualified SQL — used by
+    repos that JOIN multiple tables and need to disambiguate columns
+    that exist in both. Unmapped column names fall back to the bare
+    `column` form. Example:
+        column_map={
+            "customer_code": "cd.customer_code",
+            "create_date":   "cd.create_date",
+            "customer_name": "c.customer_name",
+        }
     """
     clauses: list[str] = []
     params: dict[str, Any] = {}
     for i, f in enumerate(filters):
         bind_name = f"flt_{param_offset + i}"
-        col_sql = f"`{f.column}`"
+        if column_map and f.column in column_map:
+            col_sql = column_map[f.column]
+        else:
+            col_sql = f"`{f.column}`"
         clauses.append(
             OPERATORS[f.operator].format(col=col_sql, param=bind_name)
         )
