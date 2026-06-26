@@ -192,7 +192,10 @@ export function ResourceTable({
     queryFn: () =>
       listResource<CustomerRow>('customers', {
         page: 1,
-        page_size: 200,
+        // Fetch the full list, not a 200-row page. This query shares
+        // CUSTOMER_PICKER_QUERY_KEY with the customer picker, so a smaller
+        // page here would cap the picker's dropdown on these tabs.
+        page_size: 5000,
         sort_by: 'customer_name',
         sort_dir: 'asc',
       }),

@@ -69,11 +69,22 @@ export function CustomerCodeNameInput({
   const options = useMemo(() => {
     const term = draft.trim().toLowerCase()
     if (!term) return rows
-    return rows.filter(
+    const matched = rows.filter(
       (r) =>
         (r.customer_name ?? '').toLowerCase().includes(term) ||
         String(r.customer_code).includes(term),
     )
+    // Rank: exact (code or name) first, then prefix, then match-anywhere.
+    // Equal ranks keep the incoming (name-sorted) order via a stable sort —
+    // so typing "1" puts code 1 at the very top, above 10/11/100/etc.
+    const rank = (r: CustomerRow) => {
+      const name = (r.customer_name ?? '').toLowerCase()
+      const code = String(r.customer_code)
+      if (code === term || name === term) return 0
+      if (code.startsWith(term) || name.startsWith(term)) return 1
+      return 2
+    }
+    return [...matched].sort((a, b) => rank(a) - rank(b))
   }, [rows, draft])
 
   useEffect(() => {
