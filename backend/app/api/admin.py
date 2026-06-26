@@ -201,20 +201,14 @@ def retry_revokes(
     request: Request,
     agent: Annotated[CurrentAgent, Depends(require_admin)],
 ) -> RetryResponse:
-    """Remove access for every active user under a customer: REVOKE ALL
-    PRIVILEGES, DROP USER, and delete the customer's rows from the three
-    secure.user_details_internal* tables.
+    """Remove access for a customer's DISABLED users (disable = 1): REVOKE
+    ALL PRIVILEGES + DROP USER for each, then purge any lingering lookup
+    rows for them. Active users (disable = 0) are never touched — this is
+    the inverse of retry_grants, which acts on disable = 0.
 
-    The exact inverse of retry_grants. Re-running retry_grants on the same
-    customer puts everything back: its refresh phase repopulates the lookup
-    tables from secure.customer_users (any user still disable=0 returns),
-    then re-creates the accounts and re-grants privileges.
-
-    Skips the refresh phase by design — the agent has already chosen
-    "remove access," and the revoke generators read the to-be-dropped user
-    list from the current (pre-refresh) lookup table. Refreshing first would
-    drop a just-disabled user from that table and make the DROP a no-op for
-    them, which is the opposite of what we want.
+    The disabled-user list is read from the canonical secure.customer_users
+    (disabled users are excluded from the refreshed user_details tables), so
+    no refresh is needed first.
     """
     if customer_code < 0:
         raise HTTPException(

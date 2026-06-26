@@ -104,12 +104,10 @@ function SyncCard() {
           </HoverHint>
         </div>
 
-        {/* Remove grants card — inverse of Run grants. Destructive: REVOKEs
-            all privileges AND drops the MariaDB user accounts (DROP USER)
-            for every active user under the customer, then clears the
-            secure.user_details_internal* rows. Run grants on the same
-            customer recreates them. Two-click confirm to prevent
-            fat-fingers. */}
+        {/* Remove grants card — REVOKEs privileges AND drops the MariaDB
+            accounts (DROP USER) for the customer's DISABLED users
+            (disable = 1), then purges their lookup rows. Active users are
+            untouched. Two-click confirm to prevent fat-fingers. */}
         <div className="rounded-md border border-error-600/30 bg-error-100/30 p-3">
           <div className="flex items-center gap-2">
             <span className="inline-block h-2 w-2 rounded-full bg-error-600" />
@@ -118,10 +116,10 @@ function SyncCard() {
             </div>
           </div>
           <div className="mt-1 text-[11px] text-gray-500">
-            Strips privileges (REVOKE) and removes the MariaDB user
-            accounts (DROP USER) for every active user of the chosen
-            customer. Run grants on the same customer afterwards
-            recreates them from secure.user_details_internal_2026.
+            Strips privileges (REVOKE) and drops the MariaDB user accounts
+            (DROP USER) for the chosen customer's disabled users
+            (Disabled = Yes). Active users are untouched. Disable a user in
+            the Users tab first, then run this.
           </div>
           <HoverHint
             show={!canAct}

@@ -504,66 +504,72 @@ def grants_for_customer(conn: Connection, customer_code: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Revokes.
+# Revokes — remove access for a customer's DISABLED users (disable = 1).
 #
-# For each user that Run grants would CREATE (read from the SAME source the
-# CREATE USER generators use — secure.user_details_internal_2026, disable=0,
-# matching customer_code), we run:
+# Workflow: an agent flips a user's `disable` to 1 in the Users tab, then runs
+# Remove grants for that customer. For each disabled user we run:
 #   1. REVOKE ALL PRIVILEGES, GRANT OPTION FROM '<user>'@'%'
 #   2. DROP USER IF EXISTS '<user>'@'%'
+# Active (disable = 0) users are never touched — this is the inverse of Run
+# grants, which acts only on disable = 0.
 #
-# Then we delete the customer's rows from the three secure.user_details_
-# internal* tables (see _REVOKE_CLEANUP_STATEMENTS). By request the cleanup is
-# scoped to those only — myuser.user_details* and imic_control are left
-# untouched — so this is intentionally NOT a full inverse of the refresh.
+# The disabled-user list is read from the canonical secure.customer_users:
+# disabled users are EXCLUDED from user_details_internal_2026 (the refresh
+# builds it from disable = 0), so that denormalized table can't supply them.
+#
+# Then we purge any lingering lookup rows for those disabled users from the
+# three secure.user_details_internal* tables (scoped to disabled users so
+# active users' rows survive). myuser.user_details* and imic_control are
+# left alone.
 #
 # REVOKE ALL PRIVILEGES, GRANT OPTION removes privileges at every level
-# (global like FILE, db, table, routine); DROP USER then removes the account,
-# the inverse of CREATE USER. The REVOKE is redundant before DROP — DROP
-# cleans up everything — but it makes the audit trail explicit and is
-# defensive if DROP fails (e.g. open connections holding the account).
-#
-# The cleanup is "soft": the canonical secure.customer_users row stays with
-# disable=0. Re-running Run grants for this customer refreshes the lookup
-# tables from customer_users and re-creates/re-grants any user still
-# disable=0. To make removal permanent, also flip the user's disable flag
-# (or delete the row) in the Users table.
+# (global like FILE, db, table, routine); DROP USER then removes the account.
+# The REVOKE is redundant before DROP but makes the audit trail explicit and
+# is defensive if DROP fails (e.g. open connections holding the account).
 # ---------------------------------------------------------------------------
 
-# Both generators read the user list from secure.user_details_internal_2026 —
-# the SAME source the CREATE USER generators use — so the set of accounts we
-# DROP is exactly the set Run grants would CREATE. (myuser.user_details_2026
-# is built from this table with INSERT IGNORE; reading the source avoids a row
-# lost to a unique-key collision being created-but-never-dropped.)
+# Both generators read the DISABLED users straight from secure.customer_users
+# (the canonical table). user_details_internal_2026 only holds disable = 0
+# rows, so it can't list the disabled users we need to drop.
 _REVOKE_GENERATOR = """
     SELECT CONCAT('REVOKE ALL PRIVILEGES, GRANT OPTION FROM `', user_id, '`@`%`;')
-    FROM   secure.user_details_internal_2026
-    WHERE  `disable` = 0 AND customer_code = :cc
+    FROM   secure.customer_users
+    WHERE  `disable` = 1 AND customer_code = :cc
     GROUP BY user_id
 """
 
 _DROP_USER_GENERATOR = """
     SELECT CONCAT('DROP USER IF EXISTS `', user_id, '`@`%`;')
-    FROM   secure.user_details_internal_2026
-    WHERE  `disable` = 0 AND customer_code = :cc
+    FROM   secure.customer_users
+    WHERE  `disable` = 1 AND customer_code = :cc
     GROUP BY user_id
 """
 
-# Lookup-table cleanup. Run AFTER the REVOKE/DROP statements have been
-# collected (see revokes_for_customer), this deletes the customer's rows from
-# the three secure.user_details_internal* tables. Scoped to those by request:
-# myuser.user_details* and the imic_control tables are intentionally left
-# untouched, so this is NOT a full inverse of the refresh's INSERTs.
-# Parameterized on :cc, applied via text(); no FK between them, order is moot.
+# Lookup-table cleanup. Run AFTER the REVOKE/DROP statements are collected,
+# this purges any lingering rows for the customer's DISABLED users from the
+# three secure.user_details_internal* tables. A disabled user is normally
+# already absent (the refresh excludes disable = 1), but the revoke path skips
+# the refresh, so a just-disabled user may still be present. Scoped to
+# disabled users via a subquery so ACTIVE users' rows are never deleted. :cc
+# binds to every occurrence.
 _REVOKE_CLEANUP_STATEMENTS: tuple[str, ...] = (
-    "DELETE FROM secure.user_details_internal      WHERE customer_code = :cc",
-    "DELETE FROM secure.user_details_internal_2023 WHERE customer_code = :cc",
-    "DELETE FROM secure.user_details_internal_2026 WHERE customer_code = :cc",
+    "DELETE FROM secure.user_details_internal "
+    "WHERE customer_code = :cc AND user_id IN "
+    "(SELECT user_id FROM secure.customer_users "
+    "WHERE `disable` = 1 AND customer_code = :cc)",
+    "DELETE FROM secure.user_details_internal_2023 "
+    "WHERE customer_code = :cc AND user_id IN "
+    "(SELECT user_id FROM secure.customer_users "
+    "WHERE `disable` = 1 AND customer_code = :cc)",
+    "DELETE FROM secure.user_details_internal_2026 "
+    "WHERE customer_code = :cc AND user_id IN "
+    "(SELECT user_id FROM secure.customer_users "
+    "WHERE `disable` = 1 AND customer_code = :cc)",
 )
 
 
 def _collect_revokes(conn: Connection, customer_code: int) -> list[str]:
-    """Collect REVOKE + DROP USER statements for every active user.
+    """Collect REVOKE + DROP USER statements for every disabled user.
 
     Ordering matters: REVOKE first, then DROP. The list is returned
     as: [REVOKE u1, REVOKE u2, ..., DROP u1, DROP u2, ...].
@@ -579,8 +585,9 @@ def _collect_revokes(conn: Connection, customer_code: int) -> list[str]:
 
 
 def revokes_for_customer(conn: Connection, customer_code: int) -> int:
-    """Strip access AND remove MariaDB accounts for every active user
-    under a customer, then clean the user_details lookup tables.
+    """Strip access AND remove MariaDB accounts for every DISABLED user
+    (disable = 1) under a customer, then purge their lookup rows. Active
+    users (disable = 0) are never touched.
 
     Returns count of executed statements (REVOKEs + DROPs + cleanup
     DELETEs). Individual failures are logged but don't abort the rest
@@ -597,10 +604,8 @@ def revokes_for_customer(conn: Connection, customer_code: int) -> int:
             ok += 1
         except Exception as e:
             log.warning("revoke/drop failed (%s): %s", stmt[:80], e)
-    # Phase 2: cleanup the denormalized lookup tables. These get
-    # rebuilt by refresh_all on the next Run grants, but for the
-    # window between Remove grants and any subsequent action, the
-    # tables shouldn't list users whose accounts were just dropped.
+    # Phase 2: purge any lingering lookup rows for the disabled users
+    # (scoped to disable = 1 so active users' rows survive).
     for stmt in _REVOKE_CLEANUP_STATEMENTS:
         try:
             conn.execute(text(stmt), {"cc": customer_code})
