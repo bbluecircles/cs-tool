@@ -11,7 +11,7 @@ import clsx from 'clsx'
 import { ApiError, apiErrorDetail } from '@/api/client'
 import { createResource } from '@/api/resources'
 import type { ColumnDef, ResourceConfig } from './resourceConfigs'
-import { CustomerCombobox } from './CustomerCombobox'
+import { CustomerCodeNameInput } from './CustomerCodeNameInput'
 import { DatabasePicker, useDbFeatures } from './DatabasePicker'
 import { DatabasePickerMulti } from './DatabasePickerMulti'
 import { ModalShell } from './ModalShell'
@@ -403,7 +403,7 @@ function FieldInput({
 
   if (column.kind === 'customer_code') {
     return (
-      <CustomerCombobox
+      <CustomerCodeNameInput
         value={typeof value === 'number' ? value : null}
         onChange={(v) => onChange(v)}
         disabled={disabled}

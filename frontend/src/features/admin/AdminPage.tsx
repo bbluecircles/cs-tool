@@ -7,7 +7,7 @@ import {
   retryRevokes,
   type RetryResponse,
 } from '@/api/admin'
-import { CustomerCombobox } from '@/features/resources/CustomerCombobox'
+import { CustomerCodeNameInput } from '@/features/resources/CustomerCodeNameInput'
 
 export function AdminPage() {
   return (
@@ -60,7 +60,7 @@ function SyncCard() {
           whichever customer is selected here. */}
       <div className="space-y-1">
         <label className="label">Customer</label>
-        <CustomerCombobox
+        <CustomerCodeNameInput
           value={customerCode}
           onChange={handleCustomerChange}
         />
