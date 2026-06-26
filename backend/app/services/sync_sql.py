@@ -568,10 +568,9 @@ def grants_for_customer(conn: Connection, customer_code: int) -> int:
 # disabled users are EXCLUDED from user_details_internal_2026 (the refresh
 # builds it from disable = 0), so that denormalized table can't supply them.
 #
-# Then we purge any lingering lookup rows for those disabled users from the
-# three secure.user_details_internal* tables (scoped to disabled users so
-# active users' rows survive). myuser.user_details* and imic_control are
-# left alone.
+# Then we purge any lingering lookup rows for those disabled users from EVERY
+# user_details* table — secure.*, myuser.*, AND imic_control.* — scoped to
+# disabled users so active users' rows survive.
 #
 # REVOKE ALL PRIVILEGES, GRANT OPTION removes privileges at every level
 # (global like FILE, db, table, routine); DROP USER then removes the account.
@@ -596,26 +595,31 @@ _DROP_USER_GENERATOR = """
     GROUP BY user_id
 """
 
+# The denormalized user_details* tables the refresh maintains — the canonical
+# list, shared by the revoke cleanup and propagate_disable.
+_USER_DETAILS_TABLES: tuple[str, ...] = (
+    "secure.user_details_internal",
+    "secure.user_details_internal_2023",
+    "secure.user_details_internal_2026",
+    "myuser.user_details",
+    "myuser.user_details_2023",
+    "myuser.user_details_2026",
+    "imic_control.user_details",
+    "imic_control.user_details_2023",
+)
+
 # Lookup-table cleanup. Run AFTER the REVOKE/DROP statements are collected,
-# this purges any lingering rows for the customer's DISABLED users from the
-# three secure.user_details_internal* tables. A disabled user is normally
-# already absent (the refresh excludes disable = 1), but the revoke path skips
-# the refresh, so a just-disabled user may still be present. Scoped to
-# disabled users via a subquery so ACTIVE users' rows are never deleted. :cc
-# binds to every occurrence.
-_REVOKE_CLEANUP_STATEMENTS: tuple[str, ...] = (
-    "DELETE FROM secure.user_details_internal "
-    "WHERE customer_code = :cc AND user_id IN "
-    "(SELECT user_id FROM secure.customer_users "
-    "WHERE `disable` = 1 AND customer_code = :cc)",
-    "DELETE FROM secure.user_details_internal_2023 "
-    "WHERE customer_code = :cc AND user_id IN "
-    "(SELECT user_id FROM secure.customer_users "
-    "WHERE `disable` = 1 AND customer_code = :cc)",
-    "DELETE FROM secure.user_details_internal_2026 "
-    "WHERE customer_code = :cc AND user_id IN "
-    "(SELECT user_id FROM secure.customer_users "
-    "WHERE `disable` = 1 AND customer_code = :cc)",
+# this purges any lingering rows for the customer's DISABLED users from EVERY
+# user_details* table (secure, myuser, AND imic_control). A disabled user is
+# normally already absent (the refresh excludes disable = 1), but the revoke
+# path skips the refresh, so a just-disabled user may still be present in any
+# of them. Scoped to disabled users via a subquery so ACTIVE users' rows are
+# never deleted. :cc binds to every occurrence.
+_REVOKE_CLEANUP_STATEMENTS: tuple[str, ...] = tuple(
+    f"DELETE FROM {tbl} WHERE customer_code = :cc AND user_id IN "
+    f"(SELECT user_id FROM secure.customer_users "
+    f"WHERE `disable` = 1 AND customer_code = :cc)"
+    for tbl in _USER_DETAILS_TABLES
 )
 
 
@@ -683,18 +687,6 @@ def revokes_for_customer(conn: Connection, customer_code: int) -> int:
 # We UPDATE in place (not DELETE) precisely so re-enable is a cheap flip. A
 # user not yet present in a given table just updates 0 rows there (already
 # invisible to that app) — harmless.
-_USER_DETAILS_TABLES: tuple[str, ...] = (
-    "secure.user_details_internal",
-    "secure.user_details_internal_2023",
-    "secure.user_details_internal_2026",
-    "myuser.user_details",
-    "myuser.user_details_2023",
-    "myuser.user_details_2026",
-    "imic_control.user_details",
-    "imic_control.user_details_2023",
-)
-
-
 def propagate_disable(conn: Connection, *, user_id: str, disable: int) -> int:
     """Set `disable` = <disable> for one user across every user_details*
     table. Returns total rows updated. Per-table failures are logged but
