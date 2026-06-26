@@ -668,3 +668,46 @@ def revokes_for_customer(conn: Connection, customer_code: int) -> int:
         "revokes_for_customer(%s): %d/%d ok", customer_code, ok, total
     )
     return ok
+
+
+# ---------------------------------------------------------------------------
+# Targeted disable propagation (edit-time safety net)
+# ---------------------------------------------------------------------------
+# When a CS agent flips a user's `disable` flag in the Users tab, mirror it
+# into every denormalized user_details* table for that one user — WITHOUT a
+# full refresh. The apps gate login on user_details.disable, so:
+#   disable -> 1  blocks app access immediately, even if the agent forgets to
+#                 Remove grants (the MariaDB account is left intact).
+#   disable -> 0  restores access immediately by flipping the flag back, so an
+#                 accidental disable + re-enable round-trips with no Run grants.
+# We UPDATE in place (not DELETE) precisely so re-enable is a cheap flip. A
+# user not yet present in a given table just updates 0 rows there (already
+# invisible to that app) — harmless.
+_USER_DETAILS_TABLES: tuple[str, ...] = (
+    "secure.user_details_internal",
+    "secure.user_details_internal_2023",
+    "secure.user_details_internal_2026",
+    "myuser.user_details",
+    "myuser.user_details_2023",
+    "myuser.user_details_2026",
+    "imic_control.user_details",
+    "imic_control.user_details_2023",
+)
+
+
+def propagate_disable(conn: Connection, *, user_id: str, disable: int) -> int:
+    """Set `disable` = <disable> for one user across every user_details*
+    table. Returns total rows updated. Per-table failures are logged but
+    don't abort the rest (a missing table or row is not fatal)."""
+    total = 0
+    for tbl in _USER_DETAILS_TABLES:
+        try:
+            r = conn.execute(
+                text(f"UPDATE {tbl} SET `disable` = :d WHERE user_id = :uid"),
+                {"d": disable, "uid": user_id},
+            )
+            total += r.rowcount or 0
+        except Exception as e:
+            log.warning("propagate_disable failed on %s: %s", tbl, e)
+    log.info("propagate_disable(%s -> %s): %d rows", user_id, disable, total)
+    return total

@@ -29,7 +29,7 @@ from app.schemas.resources import (
     UpdateResponse,
     UserIdCheckResponse,
 )
-from app.services import audit, customer_users_repo
+from app.services import audit, customer_users_repo, sync_sql
 from app.services.filter_parser import parse_filters_or_422
 
 router = APIRouter(prefix="/api/customer-users", tags=["customer_users"])
@@ -205,6 +205,13 @@ def update_customer_user(
         except ValueError as e:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+            )
+        # When `disable` changes, mirror it into the denormalized
+        # user_details* tables so the app blocks (disable=1) or restores
+        # (disable=0) the user immediately, without waiting for a full refresh.
+        if "disable" in payload.changes:
+            sync_sql.propagate_disable(
+                conn, user_id=user_id, disable=int(payload.changes["disable"])
             )
         after = customer_users_repo.get_customer_user(
             conn, user_id, customer_code
