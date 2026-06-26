@@ -149,6 +149,12 @@ export interface ColumnDef {
    * column (name) — Discharge and Claim tables show this pair.
    */
   displayRaw?: boolean
+  /**
+   * Render the cell value bold + UPPERCASE for visibility. Used on the
+   * state/database columns (Discharge database_name, Claim ppi_state).
+   * Display-only — the stored/edited value is unchanged.
+   */
+  emphasize?: boolean
 }
 
 export interface ResourceConfig {
@@ -168,6 +174,11 @@ export interface ResourceConfig {
    * Whether delete is allowed. True for customer-datasets and ppi-datasets.
    */
   allowDelete: boolean
+  /**
+   * Whether each row shows a "Cancel" action that stamps cancelled_date
+   * with today's date. True for customers (which can't be deleted).
+   */
+  allowCancel?: boolean
   /**
    * Drives the delete-confirm modal's impact section.
    *  - 'customer_dataset' : fetches /delete-impact and shows the active-
@@ -296,6 +307,9 @@ export const customersConfig: ResourceConfig = {
   ]),
   filterByCustomerCode: false,
   allowDelete: false,
+  // Customers can't be deleted; instead each row gets a "Cancel" action
+  // that stamps cancelled_date with today's date.
+  allowCancel: true,
   columns: [
     {
       key: 'customer_code', label: 'Code', kind: 'readonly',
@@ -523,6 +537,7 @@ export const customerDatasetsConfig: ResourceConfig = {
       editable: true, maxLength: 25,
       showInCreate: true, requiredOnCreate: true,
       pickerRequireDischargeFeatures: true,
+      emphasize: true,
     },
     {
       // Always 'd' for this resource. Hidden from the table AND the
@@ -635,6 +650,7 @@ export const ppiDatasetsConfig: ResourceConfig = {
       createKind: 'database_picker_multi',
       pickerExcludeFromResource: 'ppi-datasets',
       pickerExcludeColumnKey: 'ppi_state',
+      emphasize: true,
     },
     {
       key: 'ppi_detail', label: 'Detail', kind: 'flag', editable: true,

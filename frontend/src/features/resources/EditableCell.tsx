@@ -43,6 +43,8 @@ export function EditableCell({
           'focus:outline-none focus:ring-2 focus:ring-focus-ring',
           dirty && 'bg-warning-100 text-gray-900 font-medium',
           disabled && 'cursor-not-allowed opacity-60',
+          // State/database columns: bold + uppercase for visibility.
+          column.emphasize && 'font-bold uppercase',
         )}
         title={
           dirty

@@ -25,6 +25,7 @@ import {
 } from '@/api/resources'
 import { setHasUnsaved } from '@/lib/unsavedSignal'
 
+import { CancelConfirmModal } from './CancelConfirmModal'
 import { ConfirmSaveModal } from './ConfirmSaveModal'
 import { CreateRowModal } from './CreateRowModal'
 import { DeleteConfirmModal } from './DeleteConfirmModal'
@@ -36,6 +37,14 @@ import type { ResourceConfig } from './resourceConfigs'
 import { useDirtyRows } from './useDirtyRows'
 
 type Row = Record<string, unknown>
+
+/** Local-timezone YYYY-MM-DD, for stamping cancelled_date. */
+function localToday(): string {
+  const d = new Date()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
 
 interface ResourcePageProps {
   config: ResourceConfig
@@ -54,6 +63,7 @@ export function ResourcePage({ config }: ResourcePageProps) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Row | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<Row | null>(null)
   const [saveTarget, setSaveTarget] = useState<Row | null>(null)
   const dirty = useDirtyRows()
 
@@ -285,6 +295,27 @@ export function ResourcePage({ config }: ResourcePageProps) {
     }
   }
 
+  // --- cancel (customers): stamp cancelled_date with today ---
+  const cancelM = useMutation({
+    mutationFn: (row: Row) =>
+      updateResource(config.slug, config.buildId(row), {
+        cancelled_date: localToday(),
+      }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: [config.slug] })
+    },
+  })
+
+  async function confirmCancel() {
+    if (!cancelTarget) return
+    try {
+      await cancelM.mutateAsync(cancelTarget)
+      setCancelTarget(null)
+    } catch (e) {
+      console.error('cancel failed', e)
+    }
+  }
+
   // --- selection handlers ---
   /**
    * Toggle one row's selection state. Clears any in-progress shift
@@ -461,6 +492,9 @@ export function ResourcePage({ config }: ResourcePageProps) {
         onDeleteRow={
           config.allowDelete ? (row) => setDeleteTarget(row) : undefined
         }
+        onCancelRow={
+          config.allowCancel ? (row) => setCancelTarget(row) : undefined
+        }
         savingRowKey={savingRowKey}
         selectedKeys={selectedKeys}
         onToggleSelect={onToggleSelect}
@@ -502,6 +536,16 @@ export function ResourcePage({ config }: ResourcePageProps) {
           onClose={() => setDeleteTarget(null)}
           onConfirm={confirmDelete}
           isDeleting={deleteM.isPending}
+        />
+      )}
+
+      {cancelTarget && config.allowCancel && (
+        <CancelConfirmModal
+          rowDescription={`${cancelTarget.customer_name ?? 'customer'} (code ${cancelTarget.customer_code})`}
+          today={localToday()}
+          onClose={() => setCancelTarget(null)}
+          onConfirm={confirmCancel}
+          isPending={cancelM.isPending}
         />
       )}
 

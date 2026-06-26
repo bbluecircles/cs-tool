@@ -13,7 +13,7 @@
  * cell and a blank filter cell so the columns align — without the spacer
  * the data column would shift left under the actions column.
  */
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ColumnDef,
   flexRender,
@@ -60,6 +60,8 @@ interface ResourceTableProps {
   onSaveRow: (row: Row) => void
   onDiscardRow: (row: Row) => void
   onDeleteRow?: (row: Row) => void
+  /** "Cancel" row action (Customers tab) — stamps cancelled_date today. */
+  onCancelRow?: (row: Row) => void
   savingRowKey: string | null
   /** Row keys (config.rowKey(row)) currently selected. Optional —
    *  callers that don't care about selection can omit it. */
@@ -93,6 +95,7 @@ export function ResourceTable({
   onSaveRow,
   onDiscardRow,
   onDeleteRow,
+  onCancelRow,
   savingRowKey,
   // Defaults so this table doesn't crash if a caller forgets to wire
   // selection. The selection toolbar and edit-modal trigger simply
@@ -106,6 +109,55 @@ export function ResourceTable({
     () => config.columns.filter((c) => c.show !== false),
     [config],
   )
+
+  // --- column reordering (drag headers; persisted per table via localStorage) ---
+  const [columnOrder, setColumnOrder] = useState<string[]>(() =>
+    loadColumnOrder(config.slug, visibleConfigCols),
+  )
+  useEffect(() => {
+    try {
+      localStorage.setItem(colOrderKey(config.slug), JSON.stringify(columnOrder))
+    } catch {
+      // localStorage unavailable (e.g. private mode): reordering still works
+      // for the session, it just won't persist across reloads.
+    }
+  }, [columnOrder, config.slug])
+
+  // Config columns in the user's chosen order. Drives the colgroup widths
+  // and the filter row; the header/data cells are ordered by tanstack via
+  // the columnOrder state.
+  const orderedConfigCols = useMemo(() => {
+    const byKey = new Map(visibleConfigCols.map((c) => [c.key, c]))
+    const ordered: ResourceColumnDef[] = []
+    for (const id of columnOrder) {
+      const c = byKey.get(id)
+      if (c) ordered.push(c)
+    }
+    for (const c of visibleConfigCols) {
+      if (!columnOrder.includes(c.key)) ordered.push(c)
+    }
+    return ordered
+  }, [visibleConfigCols, columnOrder])
+
+  const dragColId = useRef<string | null>(null)
+  const [dragOverColId, setDragOverColId] = useState<string | null>(null)
+
+  function handleColDrop(targetId: string) {
+    const fromId = dragColId.current
+    dragColId.current = null
+    setDragOverColId(null)
+    if (!fromId || fromId === targetId) return
+    setColumnOrder((prev) => {
+      const ids = prev.filter((x) => x !== '__actions')
+      const fromIdx = ids.indexOf(fromId)
+      const toIdx = ids.indexOf(targetId)
+      if (fromIdx < 0 || toIdx < 0) return prev
+      const next = [...ids]
+      next.splice(fromIdx, 1)
+      next.splice(toIdx, 0, fromId)
+      return [...next, '__actions']
+    })
+  }
 
   // Prefetch the db_database list so the cache is warm before the agent
   // clicks into an IP/OP/ED/APR-DRG cell. We read from the cache via
@@ -279,7 +331,7 @@ export function ResourceTable({
         const has = dirty.hasDirty(key)
         const isSaving = savingRowKey === key
         return (
-          <div className="flex items-center gap-1 min-w-[140px]">
+          <div className="flex items-center gap-1 min-w-[150px]">
             <button
               type="button"
               disabled={!has || isSaving}
@@ -317,6 +369,17 @@ export function ResourceTable({
                 Delete
               </button>
             )}
+            {config.allowCancel && onCancelRow && (
+              <button
+                type="button"
+                onClick={() => onCancelRow(rowObj)}
+                disabled={isSaving}
+                className="text-xs px-2 py-0.5 rounded text-warning-600 hover:bg-warning-100 disabled:opacity-50"
+                title="Set the cancelled date to today"
+              >
+                Cancel
+              </button>
+            )}
           </div>
         )
       },
@@ -324,18 +387,19 @@ export function ResourceTable({
 
     return tableCols
   }, [
-    visibleConfigCols, config, dirty, onDeleteRow, onDiscardRow, onSaveRow,
-    savingRowKey, qc, dbFeaturesQuery.data, customerPickerQuery.data,
+    visibleConfigCols, config, dirty, onDeleteRow, onCancelRow, onDiscardRow,
+    onSaveRow, savingRowKey, qc, dbFeaturesQuery.data, customerPickerQuery.data,
   ])
 
   const table = useReactTable({
     data: rows,
     columns,
-    state: { sorting },
+    state: { sorting, columnOrder },
     onSortingChange: (updater) => {
       const next = typeof updater === 'function' ? updater(sorting) : updater
       onSortingChange(next)
     },
+    onColumnOrderChange: setColumnOrder,
     manualSorting: true,
     manualPagination: true,
     manualFiltering: true,
@@ -379,10 +443,10 @@ export function ResourceTable({
               from wasting space on flag columns. */}
           <colgroup>
             <col style={{ width: 32 }} />
-            {visibleConfigCols.map((col) => (
+            {orderedConfigCols.map((col) => (
               <col key={col.key} style={{ width: predictColumnWidthPx(col) }} />
             ))}
-            <col style={{ width: 150 }} />
+            <col style={{ width: 160 }} />
           </colgroup>
           <thead className="sticky top-0 z-10">
             {/* Row 1: column labels + sort indicators */}
@@ -398,6 +462,8 @@ export function ResourceTable({
                 {hg.headers.map((h) => {
                   const canSort = h.column.getCanSort()
                   const sort = h.column.getIsSorted()
+                  const canReorder = h.column.id !== '__actions'
+                  const isDropTarget = dragOverColId === h.column.id
                   return (
                     <th
                       key={h.id}
@@ -406,8 +472,33 @@ export function ResourceTable({
                         'bg-table-header text-left text-xs font-semibold',
                         'text-gray-700 px-3 py-2 border-b border-border align-bottom',
                         canSort && 'cursor-pointer select-none hover:bg-primary-100',
+                        isDropTarget && 'bg-secondary-100',
                       )}
                       onClick={canSort ? h.column.getToggleSortingHandler() : undefined}
+                      onDragOver={
+                        canReorder
+                          ? (e) => {
+                              e.preventDefault()
+                              if (
+                                dragColId.current &&
+                                dragColId.current !== h.column.id
+                              ) {
+                                setDragOverColId(h.column.id)
+                              }
+                            }
+                          : undefined
+                      }
+                      onDragLeave={
+                        canReorder
+                          ? () =>
+                              setDragOverColId((cur) =>
+                                cur === h.column.id ? null : cur,
+                              )
+                          : undefined
+                      }
+                      onDrop={
+                        canReorder ? () => handleColDrop(h.column.id) : undefined
+                      }
                       title={
                         canSort
                           ? sort === 'asc'
@@ -418,12 +509,34 @@ export function ResourceTable({
                           : undefined
                       }
                     >
-                      <span className="flex items-start gap-1 pointer-events-none">
-                        <span className="whitespace-normal break-words leading-tight">
+                      <span className="flex items-start gap-1">
+                        {canReorder && (
+                          <span
+                            draggable
+                            onDragStart={(e) => {
+                              dragColId.current = h.column.id
+                              e.dataTransfer.effectAllowed = 'move'
+                              e.dataTransfer.setData('text/plain', h.column.id)
+                            }}
+                            onDragEnd={() => {
+                              dragColId.current = null
+                              setDragOverColId(null)
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="cursor-grab select-none leading-none text-gray-300 hover:text-gray-500"
+                            title="Drag to reorder column"
+                            aria-label="Drag to reorder column"
+                          >
+                            ⠿
+                          </span>
+                        )}
+                        <span className="pointer-events-none whitespace-normal break-words leading-tight">
                           {flexRender(h.column.columnDef.header, h.getContext())}
                         </span>
                         {canSort && (
-                          <SortIndicator sort={sort === false ? null : sort} />
+                          <span className="pointer-events-none">
+                            <SortIndicator sort={sort === false ? null : sort} />
+                          </span>
                         )}
                       </span>
                     </th>
@@ -439,7 +552,7 @@ export function ResourceTable({
                 key="flt-__select"
                 className="bg-primary-100/30 px-2 py-1 border-b border-border w-8"
               />
-              {visibleConfigCols.map((col) => (
+              {orderedConfigCols.map((col) => (
                 <th
                   key={`flt-${col.key}`}
                   className="bg-primary-100/30 px-2 py-1 border-b border-border align-top"
@@ -646,4 +759,40 @@ function predictColumnWidthPx(col: ResourceColumnDef): number {
   }
 
   return Math.min(Math.max(labelPx, kindMin), 240)
+}
+
+// --- column-order persistence (localStorage, per table) -------------------
+
+const COL_ORDER_PREFIX = 'cs-tool:colorder:'
+
+function colOrderKey(slug: string): string {
+  return COL_ORDER_PREFIX + slug
+}
+
+function defaultColumnOrder(cols: ResourceColumnDef[]): string[] {
+  return [...cols.map((c) => c.key), '__actions']
+}
+
+/**
+ * Load the saved column order for a table, reconciled against the current
+ * columns: unknown ids are dropped, newly-added columns are appended, and
+ * the trailing actions column is always pinned last.
+ */
+function loadColumnOrder(slug: string, cols: ResourceColumnDef[]): string[] {
+  const def = defaultColumnOrder(cols)
+  try {
+    const raw = localStorage.getItem(colOrderKey(slug))
+    if (!raw) return def
+    const stored = JSON.parse(raw) as unknown
+    if (!Array.isArray(stored)) return def
+    const valid = new Set(def)
+    const kept = stored.filter(
+      (id): id is string =>
+        typeof id === 'string' && valid.has(id) && id !== '__actions',
+    )
+    const missing = def.filter((id) => id !== '__actions' && !kept.includes(id))
+    return [...kept, ...missing, '__actions']
+  } catch {
+    return def
+  }
 }
