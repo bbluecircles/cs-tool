@@ -463,6 +463,13 @@ export function ResourcePage({ config }: ResourcePageProps) {
           </span>
           <button
             type="button"
+            className="btn-ghost"
+            onClick={() => dirty.clearAll()}
+          >
+            Discard all
+          </button>
+          <button
+            type="button"
             className="btn-primary"
             onClick={() => void doSaveAll()}
           >
