@@ -1,11 +1,10 @@
 /**
- * Customer picker as two linked inputs in a 1:3 flex row — a narrow CODE
- * box and a wide NAME box — sharing one styled dropdown.
+ * Customer picker as a single search box. Type a name OR a code; the styled
+ * (portaled) dropdown shows every match as "Name … code N". Pick one and the
+ * box shows "Name — code N" with an ✕ to clear and search again.
  *
- * Type in either box to filter the SAME list (matches name or code); click a
- * row (or Enter) to select. Both boxes then show the chosen customer. The
- * dropdown is a custom, portaled list (not a native <datalist>) so it's fully
- * styled, never clipped by a modal, and always shows every customer.
+ * One obvious input, search by either field, the selection is always spelled
+ * out — the least-surprising pattern for non-technical users.
  *
  * Data comes from the shared /api/customers cache (CUSTOMER_PICKER_QUERY_KEY).
  */
@@ -16,7 +15,7 @@ import clsx from 'clsx'
 import { listResource } from '@/api/resources'
 import { CUSTOMER_PICKER_QUERY_KEY, type CustomerRow } from './CustomerPicker'
 
-interface CustomerCodeNameInputProps {
+interface CustomerSearchSelectProps {
   value: number | null
   onChange: (v: number | null) => void
   disabled?: boolean
@@ -25,13 +24,17 @@ interface CustomerCodeNameInputProps {
   className?: string
 }
 
-export function CustomerCodeNameInput({
+function label(r: CustomerRow): string {
+  return `${r.customer_name ?? '(unnamed)'} — code ${r.customer_code}`
+}
+
+export function CustomerSearchSelect({
   value,
   onChange,
   disabled,
   invalid,
   className,
-}: CustomerCodeNameInputProps) {
+}: CustomerSearchSelectProps) {
   const q = useQuery({
     queryKey: CUSTOMER_PICKER_QUERY_KEY,
     queryFn: () =>
@@ -52,8 +55,7 @@ export function CustomerCodeNameInput({
   const selected = value != null ? byCode.get(value) ?? null : null
 
   const [open, setOpen] = useState(false)
-  const [activeField, setActiveField] = useState<'code' | 'name'>('name')
-  const [draft, setDraft] = useState('')
+  const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
   const [menuRect, setMenuRect] = useState<{
     top: number
@@ -61,22 +63,20 @@ export function CustomerCodeNameInput({
     width: number
   } | null>(null)
 
-  const rowRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
 
-  // One filtered list, matched on name OR code, driven by whichever box the
-  // agent is typing in. Empty draft → every customer (scrollable).
   const options = useMemo(() => {
-    const term = draft.trim().toLowerCase()
+    const term = query.trim().toLowerCase()
     if (!term) return rows
     const matched = rows.filter(
       (r) =>
         (r.customer_name ?? '').toLowerCase().includes(term) ||
         String(r.customer_code).includes(term),
     )
-    // Rank: exact (code or name) first, then prefix, then match-anywhere.
-    // Equal ranks keep the incoming (name-sorted) order via a stable sort —
-    // so typing "1" puts code 1 at the very top, above 10/11/100/etc.
+    // Exact (code or name) first, then prefix, then match-anywhere. Stable
+    // within a rank, so typing "1" puts code 1 at the very top.
     const rank = (r: CustomerRow) => {
       const name = (r.customer_name ?? '').toLowerCase()
       const code = String(r.customer_code)
@@ -85,18 +85,16 @@ export function CustomerCodeNameInput({
       return 2
     }
     return [...matched].sort((a, b) => rank(a) - rank(b))
-  }, [rows, draft])
+  }, [rows, query])
 
   useEffect(() => {
     setHighlight(0)
-  }, [draft, open])
+  }, [query, open])
 
-  // Position the portaled menu under the whole row; keep it anchored on
-  // scroll/resize.
   useEffect(() => {
     if (!open) return
     function recompute() {
-      const r = rowRef.current?.getBoundingClientRect()
+      const r = inputRef.current?.getBoundingClientRect()
       if (!r) return
       setMenuRect({ top: r.bottom + 4, left: r.left, width: r.width })
     }
@@ -109,19 +107,18 @@ export function CustomerCodeNameInput({
     }
   }, [open])
 
-  // Close on outside click (checking the row AND the portaled menu).
   useEffect(() => {
     if (!open) return
     function onDocMouseDown(e: MouseEvent) {
       const t = e.target as Node
       if (
-        (rowRef.current && rowRef.current.contains(t)) ||
+        (containerRef.current && containerRef.current.contains(t)) ||
         (listRef.current && listRef.current.contains(t))
       ) {
         return
       }
       setOpen(false)
-      setDraft('')
+      setQuery('')
     }
     document.addEventListener('mousedown', onDocMouseDown)
     return () => document.removeEventListener('mousedown', onDocMouseDown)
@@ -133,17 +130,19 @@ export function CustomerCodeNameInput({
     el?.scrollIntoView({ block: 'nearest' })
   }, [highlight, open, menuRect])
 
-  function focusField(field: 'code' | 'name') {
-    setActiveField(field)
-    setDraft('')
-    setOpen(true)
-  }
-
   function commit(row: CustomerRow | undefined) {
     if (!row) return
     onChange(row.customer_code)
     setOpen(false)
-    setDraft('')
+    setQuery('')
+    inputRef.current?.blur()
+  }
+
+  function clear() {
+    onChange(null)
+    setQuery('')
+    setOpen(false)
+    inputRef.current?.focus()
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -163,52 +162,50 @@ export function CustomerCodeNameInput({
     } else if (e.key === 'Escape') {
       e.preventDefault()
       setOpen(false)
-      setDraft('')
-      ;(e.target as HTMLInputElement).blur()
+      setQuery('')
+      inputRef.current?.blur()
     }
   }
 
-  const inputCls = clsx('input', invalid && 'input-error')
-  const isDisabled = disabled || q.isLoading
-
-  const codeValue =
-    open && activeField === 'code' ? draft : value != null ? String(value) : ''
-  const nameValue =
-    open && activeField === 'name' ? draft : selected?.customer_name ?? ''
+  const showClear = value != null && !open && !disabled
+  const display = open ? query : selected ? label(selected) : value != null ? `code ${value}` : ''
 
   return (
-    <div ref={rowRef} className={clsx('flex gap-2', className)}>
+    <div ref={containerRef} className={clsx('relative', className)}>
       <input
+        ref={inputRef}
         type="text"
-        inputMode="numeric"
-        className={clsx(inputCls, 'flex-1 min-w-0')}
-        placeholder="Code"
-        value={codeValue}
-        disabled={isDisabled}
-        onFocus={() => focusField('code')}
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        className={clsx('input w-full', showClear && 'pr-8', invalid && 'input-error')}
+        placeholder={
+          q.isLoading ? 'Loading customers…' : 'Search customer by name or code…'
+        }
+        disabled={disabled || q.isLoading}
+        value={display}
         onChange={(e) => {
-          setActiveField('code')
-          setDraft(e.target.value)
+          setQuery(e.target.value)
+          if (!open) setOpen(true)
+        }}
+        onFocus={(e) => {
           setOpen(true)
+          setQuery('')
+          e.target.select()
         }}
         onKeyDown={onKeyDown}
-        aria-label="Customer code"
       />
-      <input
-        type="text"
-        className={clsx(inputCls, 'flex-[3] min-w-0')}
-        placeholder={q.isLoading ? 'Loading customers…' : 'Customer name'}
-        value={nameValue}
-        disabled={isDisabled}
-        onFocus={() => focusField('name')}
-        onChange={(e) => {
-          setActiveField('name')
-          setDraft(e.target.value)
-          setOpen(true)
-        }}
-        onKeyDown={onKeyDown}
-        aria-label="Customer name"
-      />
+      {showClear && (
+        <button
+          type="button"
+          onClick={clear}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+          aria-label="Clear customer"
+          tabIndex={-1}
+        >
+          ✕
+        </button>
+      )}
       {open &&
         menuRect &&
         createPortal(
@@ -235,8 +232,6 @@ export function CustomerCodeNameInput({
                     role="option"
                     aria-selected={isSelected}
                     onMouseDown={(e) => {
-                      // mousedown fires before input blur, so the pick lands
-                      // before the outside-click handler can close the list.
                       e.preventDefault()
                       commit(r)
                     }}
