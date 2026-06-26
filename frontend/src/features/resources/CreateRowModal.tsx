@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { ApiError } from '@/api/client'
+import { ApiError, apiErrorDetail } from '@/api/client'
 import { createResource } from '@/api/resources'
 import type { ColumnDef, ResourceConfig } from './resourceConfigs'
 import { CustomerCombobox } from './CustomerCombobox'
@@ -20,12 +20,16 @@ interface CreateRowModalProps {
   config: ResourceConfig
   onClose: () => void
   onCreated: () => void
+  /** Pre-fill the customer_code field — used when the create modal is
+   *  launched from a table already filtered by Code. */
+  initialCustomerCode?: number | null
 }
 
 export function CreateRowModal({
   config,
   onClose,
   onCreated,
+  initialCustomerCode,
 }: CreateRowModalProps) {
   const qc = useQueryClient()
 
@@ -39,6 +43,13 @@ export function CreateRowModal({
     const out: Record<string, unknown> = {}
     for (const c of createFields) {
       out[c.key] = c.createDefault ?? defaultForKind(c)
+    }
+    // Pre-fill the customer when launched from a Code-filtered table.
+    if (
+      initialCustomerCode != null &&
+      createFields.some((c) => c.key === 'customer_code')
+    ) {
+      out.customer_code = initialCustomerCode
     }
     return out
   })
@@ -111,6 +122,17 @@ export function CreateRowModal({
       qc.invalidateQueries({ queryKey: [config.slug] })
       qc.invalidateQueries({ queryKey: ['customer-picker'] })
       onCreated()
+    },
+    onError: (err) => {
+      // Surface a structured field error (e.g. a duplicate user_id) on the
+      // offending input, on top of the banner message.
+      const d = apiErrorDetail(err)
+      if (d?.field) {
+        setErrors((prev) => ({
+          ...prev,
+          [d.field as string]: d.message ?? 'Invalid.',
+        }))
+      }
     },
   })
 

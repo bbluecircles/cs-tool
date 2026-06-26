@@ -16,8 +16,10 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_agent
+from app.api.errors import ER_DUP_ENTRY, conflict, invalid, mysql_errno
 from app.db.session import get_connection
 from app.schemas.auth import CurrentAgent
 from app.schemas.resources import (
@@ -67,13 +69,30 @@ def create_ppi_dataset(
     request: Request,
     agent: Annotated[CurrentAgent, Depends(get_current_agent)],
 ) -> CreateResponse:
-    if not payload.get("ppi_state") or not payload.get("customer_code"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="ppi_state and customer_code are required",
-        )
+    if not payload.get("customer_code"):
+        raise invalid("Customer is required.", field="customer_code", code="required")
+    if not payload.get("ppi_state"):
+        raise invalid("State is required.", field="ppi_state", code="required")
+
     with get_connection() as conn:
-        rec_id = ppi_dataset_repo.create_ppi_dataset(conn, payload)
+        if ppi_dataset_repo.ppi_state_exists(
+            conn, int(payload["customer_code"]), payload["ppi_state"]
+        ):
+            raise conflict(
+                f"Customer {payload['customer_code']} already has the claim "
+                f"state '{payload['ppi_state']}'.",
+                field="ppi_state",
+            )
+        try:
+            rec_id = ppi_dataset_repo.create_ppi_dataset(conn, payload)
+        except IntegrityError as e:
+            if mysql_errno(e) == ER_DUP_ENTRY:
+                raise conflict(
+                    f"Customer {payload['customer_code']} already has the claim "
+                    f"state '{payload['ppi_state']}'.",
+                    field="ppi_state",
+                )
+            raise
         audit.record(
             conn,
             user_id=agent.user_id,

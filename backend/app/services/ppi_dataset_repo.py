@@ -145,6 +145,21 @@ def create_ppi_dataset(conn: Connection, data: dict[str, Any]) -> int:
     return int(result.lastrowid)
 
 
+def ppi_state_exists(
+    conn: Connection, customer_code: int, ppi_state: str
+) -> bool:
+    """True if this customer already has this claim state. Used to return a
+    clear 'already exists' error on create instead of a raw SQL error."""
+    row = conn.execute(
+        text(
+            "SELECT 1 FROM secure.ppi_dataset "
+            "WHERE customer_code = :cc AND ppi_state = :st LIMIT 1"
+        ),
+        {"cc": customer_code, "st": ppi_state},
+    ).first()
+    return row is not None
+
+
 def update_ppi_dataset(
     conn: Connection, rec_id: int, changes: dict[str, Any]
 ) -> None:

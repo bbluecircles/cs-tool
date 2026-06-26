@@ -19,8 +19,10 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_agent
+from app.api.errors import ER_DUP_ENTRY, conflict, invalid, mysql_errno
 from app.db.session import get_connection
 from app.schemas.auth import CurrentAgent
 from app.schemas.resources import (
@@ -70,13 +72,30 @@ def create_customer_dataset(
     request: Request,
     agent: Annotated[CurrentAgent, Depends(get_current_agent)],
 ) -> CreateResponse:
-    if not payload.get("database_name") or not payload.get("customer_code"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="database_name and customer_code are required",
-        )
+    if not payload.get("customer_code"):
+        raise invalid("Customer is required.", field="customer_code", code="required")
+    if not payload.get("database_name"):
+        raise invalid("Database is required.", field="database_name", code="required")
+
     with get_connection() as conn:
-        rec_id = customer_dataset_repo.create_customer_dataset(conn, payload)
+        if customer_dataset_repo.dataset_exists(
+            conn, int(payload["customer_code"]), payload["database_name"]
+        ):
+            raise conflict(
+                f"Customer {payload['customer_code']} already has the discharge "
+                f"database '{payload['database_name']}'.",
+                field="database_name",
+            )
+        try:
+            rec_id = customer_dataset_repo.create_customer_dataset(conn, payload)
+        except IntegrityError as e:
+            if mysql_errno(e) == ER_DUP_ENTRY:
+                raise conflict(
+                    f"Customer {payload['customer_code']} already has the discharge "
+                    f"database '{payload['database_name']}'.",
+                    field="database_name",
+                )
+            raise
         audit.record(
             conn,
             user_id=agent.user_id,

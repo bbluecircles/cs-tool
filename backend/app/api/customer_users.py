@@ -15,8 +15,10 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_agent
+from app.api.errors import ER_DUP_ENTRY, conflict, invalid, mysql_errno
 from app.db.session import get_connection
 from app.schemas.auth import CurrentAgent
 from app.schemas.resources import (
@@ -71,28 +73,48 @@ def check_user_id(
     return UserIdCheckResponse(user_id=user_id, available=available)
 
 
+_FIELD_LABELS = {
+    "user_id": "User ID",
+    "customer_code": "Customer",
+    "user_password": "Password",
+    "e_mail": "Email",
+    "first_name": "First name",
+    "last_name": "Last name",
+}
+
+
 @router.post("", response_model=CreateResponse, status_code=status.HTTP_201_CREATED)
 def create_customer_user(
     payload: dict,
     request: Request,
     agent: Annotated[CurrentAgent, Depends(get_current_agent)],
 ) -> CreateResponse:
-    required = ("user_id", "customer_code", "user_password",
-                "e_mail", "first_name", "last_name")
-    missing = [k for k in required if not payload.get(k) and payload.get(k) != 0]
-    if missing:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"missing required: {missing}",
-        )
+    for field in ("user_id", "customer_code", "user_password",
+                  "e_mail", "first_name", "last_name"):
+        v = payload.get(field)
+        if v is None or v == "":
+            raise invalid(
+                f"{_FIELD_LABELS.get(field, field)} is required.",
+                field=field, code="required",
+            )
 
     with get_connection() as conn:
+        # user_id is the MariaDB username — unique across ALL customers.
         if not customer_users_repo.user_id_available(conn, payload["user_id"]):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"user_id '{payload['user_id']}' is already taken",
+            raise conflict(
+                f"User ID '{payload['user_id']}' already exists — user IDs "
+                f"must be unique across all customers.",
+                field="user_id",
             )
-        customer_users_repo.create_customer_user(conn, payload)
+        try:
+            customer_users_repo.create_customer_user(conn, payload)
+        except IntegrityError as e:
+            if mysql_errno(e) == ER_DUP_ENTRY:
+                raise conflict(
+                    f"User ID '{payload['user_id']}' already exists.",
+                    field="user_id",
+                )
+            raise
         audit.record(
             conn,
             user_id=agent.user_id,

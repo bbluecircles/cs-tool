@@ -404,6 +404,18 @@ export function ResourcePage({ config }: ResourcePageProps) {
       .join(' · ')
   }, [saveTarget, config.primaryKeyColumns])
 
+  // When the table is filtered by a single customer Code, seed the create
+  // modal's customer with it (only when that filter actually returned rows).
+  const filteredCustomerCode = useMemo(() => {
+    const f = filters.find(
+      (x) =>
+        x.column === 'customer_code' &&
+        x.operator === 'eq' &&
+        typeof x.value === 'number',
+    )
+    return f && typeof f.value === 'number' ? f.value : null
+  }, [filters])
+
   return (
     <div className="space-y-4">
       <header>
@@ -517,6 +529,11 @@ export function ResourcePage({ config }: ResourcePageProps) {
       {creating && (
         <CreateRowModal
           config={config}
+          initialCustomerCode={
+            filteredCustomerCode != null && rows.length > 0
+              ? filteredCustomerCode
+              : null
+          }
           onClose={() => setCreating(false)}
           onCreated={() => setCreating(false)}
         />

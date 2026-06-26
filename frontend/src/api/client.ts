@@ -67,10 +67,16 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
       }
     }
 
+    // detail may be a plain string (FastAPI default) or our structured
+    // object {code, message, field}. Prefer the human message either way.
+    const detail = isObject(parsed) ? parsed.detail : undefined
     const message =
-      (isObject(parsed) && typeof parsed.detail === 'string'
-        ? parsed.detail
-        : res.statusText) || `HTTP ${res.status}`
+      (typeof detail === 'string' && detail) ||
+      (isObject(detail) &&
+        typeof detail.message === 'string' &&
+        detail.message) ||
+      res.statusText ||
+      `HTTP ${res.status}`
     throw new ApiError(res.status, parsed, message)
   }
 
@@ -121,6 +127,31 @@ function safeParse(text: string): unknown {
 
 function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
+}
+
+/** Structured error body returned by the create/update endpoints
+ *  (see backend app/api/errors.py). */
+export interface ApiErrorDetail {
+  code?: string
+  message?: string
+  field?: string
+}
+
+/**
+ * Pull the structured error detail ({code, message, field}) off an
+ * ApiError. Returns null for non-ApiError responses or plain string
+ * details — callers fall back to err.message in that case.
+ */
+export function apiErrorDetail(err: unknown): ApiErrorDetail | null {
+  if (!(err instanceof ApiError)) return null
+  const body = err.body
+  if (!isObject(body) || !isObject(body.detail)) return null
+  const d = body.detail
+  return {
+    code: typeof d.code === 'string' ? d.code : undefined,
+    message: typeof d.message === 'string' ? d.message : undefined,
+    field: typeof d.field === 'string' ? d.field : undefined,
+  }
 }
 
 export const api = {

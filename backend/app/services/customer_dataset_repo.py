@@ -224,6 +224,23 @@ def create_customer_dataset(conn: Connection, data: dict[str, Any]) -> int:
     return int(result.lastrowid)
 
 
+def dataset_exists(
+    conn: Connection, customer_code: int, database_name: str
+) -> bool:
+    """True if this customer already has a dataset for this database. Used to
+    return a clear 'already exists' error on create instead of a raw SQL
+    duplicate-key error (or a silent duplicate row if the legacy table has no
+    unique key)."""
+    row = conn.execute(
+        text(
+            "SELECT 1 FROM secure.customer_dataset "
+            "WHERE customer_code = :cc AND database_name = :db LIMIT 1"
+        ),
+        {"cc": customer_code, "db": database_name},
+    ).first()
+    return row is not None
+
+
 def update_customer_dataset(
     conn: Connection, rec_id: int, changes: dict[str, Any]
 ) -> None:
