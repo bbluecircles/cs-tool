@@ -155,6 +155,11 @@ export interface ColumnDef {
    * Display-only — the stored/edited value is unchanged.
    */
   emphasize?: boolean
+  /**
+   * For option-backed columns whose label is "ABBR — Name" (the customer
+   * State column): bold the abbreviation before the em dash. Display-only.
+   */
+  boldBeforeDash?: boolean
 }
 
 export interface ResourceConfig {
@@ -335,6 +340,8 @@ export const customersConfig: ResourceConfig = {
       maxLength: 2, showInCreate: true,
       // All US states + DC. Optional, so a blank choice leads the list.
       options: [{ value: '', label: '— none —' }, ...US_STATE_OPTIONS],
+      // Labels are "AZ — Arizona"; bold the abbreviation in the table cell.
+      boldBeforeDash: true,
     },
     {
       key: 'customer_desc', label: 'Description', kind: 'text', editable: true,

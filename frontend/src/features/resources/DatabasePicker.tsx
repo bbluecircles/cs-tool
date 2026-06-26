@@ -7,7 +7,8 @@
  * Modeled on CustomerPicker. Same staleTime convention so the list is
  * fetched once per session-ish and reused across modals/cells.
  */
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
+import clsx from 'clsx'
 import { fetchDbDatabases } from '@/api/resources'
 import type { QueryClient } from '@tanstack/react-query'
 import type { DbDatabaseRow } from '@/api/resources'
@@ -176,7 +177,8 @@ export function DatabasePicker({
 
   return (
     <select
-      className={className ?? 'input'}
+      // Database/state values render bold + uppercase for visibility.
+      className={clsx(className ?? 'input', 'font-bold uppercase')}
       value={value ?? ''}
       disabled={disabled || q.isLoading}
       required={required}
@@ -189,12 +191,12 @@ export function DatabasePicker({
       </option>
       {showLegacyValue && (
         <option value={value as string}>
-          {value} (not in db_database)
+          {(value as string).toUpperCase()} (not in db_database)
         </option>
       )}
       {rows.map((r) => (
         <option key={r.db_connection_id} value={r.database_name}>
-          {r.database_name}
+          {r.database_name.toUpperCase()}
         </option>
       ))}
     </select>

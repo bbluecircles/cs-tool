@@ -28,10 +28,6 @@ interface Option {
   label: string
 }
 
-// Cap rendered rows so opening with an empty query doesn't mount thousands
-// of <li>. Typing narrows well before this matters in practice.
-const MAX_RESULTS = 100
-
 function formatRow(r: CustomerRow): string {
   return `${r.customer_name ?? '(unnamed)'} — code ${r.customer_code}`
 }
@@ -79,7 +75,6 @@ export function CustomerCombobox({
         const name = (r.customer_name ?? '').toLowerCase()
         return name.includes(term) || String(r.customer_code).includes(term)
       })
-      .slice(0, MAX_RESULTS)
       .map((r) => ({ code: r.customer_code, label: formatRow(r) }))
     if (allowAll && (!term || 'all customers'.includes(term))) {
       return [{ code: null, label: 'All customers' }, ...matched]

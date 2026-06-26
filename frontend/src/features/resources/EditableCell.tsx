@@ -52,7 +52,7 @@ export function EditableCell({
             : 'Click to edit'
         }
       >
-        {displayed}
+        {column.boldBeforeDash ? <BoldBeforeDash text={displayed} /> : displayed}
         {dirty && <span className="ml-1 text-[10px] text-warning-600">●</span>}
       </button>
     )
@@ -316,6 +316,19 @@ function TextLikeInput({
       max={column.max}
       className="input py-0.5 px-1 text-xs w-full min-w-[80px]"
     />
+  )
+}
+
+/** Bold the "ABBR" before the em dash in an "ABBR — Name" label. */
+function BoldBeforeDash({ text }: { text: string }) {
+  const sep = ' — '
+  const idx = text.indexOf(sep)
+  if (idx < 0) return <>{text}</>
+  return (
+    <>
+      <strong className="font-semibold">{text.slice(0, idx)}</strong>
+      {text.slice(idx)}
+    </>
   )
 }
 
