@@ -344,10 +344,6 @@ export const customersConfig: ResourceConfig = {
       boldBeforeDash: true,
     },
     {
-      key: 'customer_desc', label: 'Description', kind: 'text', editable: true,
-      maxLength: 255, showInCreate: true,
-    },
-    {
       key: 'max_bytes', label: 'Max Bytes', kind: 'int', editable: true,
       min: 0, showInCreate: false, createDefault: 24_000_000,
       show: false,

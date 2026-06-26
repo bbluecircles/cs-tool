@@ -158,7 +158,8 @@ def create_customer(conn: Connection, data: dict[str, Any]) -> int:
             "customer_name": data.get("customer_name"),
             "entity_code": entity_code,
             "state": data.get("state"),
-            "customer_desc": data.get("customer_desc"),
+            # Description was removed from the UI; always store empty.
+            "customer_desc": data.get("customer_desc") or "",
             # Hidden in the UI but kept in the DB. Apply the historical
             # defaults so an INSERT with no incoming value still produces
             # a valid row (the schema may have NOT NULL on these).
