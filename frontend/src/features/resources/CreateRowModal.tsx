@@ -303,17 +303,19 @@ function FieldRow({
   onChange: (v: unknown) => void
   allValues?: Record<string, unknown>
 }) {
-  // Multi-select wants the full row width since it shows chips.
+  // An explicit createSpan wins; otherwise a multi-select takes the full
+  // row (it shows chips), and long text fields span both columns.
   const isMulti = column.createKind === 'database_picker_multi'
-  const spanClass = isMulti
-    ? 'col-span-2'
-    : column.createSpan === 1
+  const spanClass =
+    column.createSpan === 1
       ? ''
       : column.createSpan === 2
         ? 'col-span-2'
-        : column.kind === 'text' && (column.maxLength ?? 0) > 40
+        : isMulti
           ? 'col-span-2'
-          : ''
+          : column.kind === 'text' && (column.maxLength ?? 0) > 40
+            ? 'col-span-2'
+            : ''
   return (
     <div className={`space-y-1 ${spanClass}`}>
       <label className="label">

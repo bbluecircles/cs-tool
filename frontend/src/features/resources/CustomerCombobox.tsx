@@ -1,13 +1,18 @@
 /**
  * Searchable customer picker. Replaces the native <select> on the admin
- * page: the agent types to filter by customer NAME or CODE, and the first
- * (top) match is highlighted — unlike a native select, which scrolls the
- * current value to the bottom.
+ * page and in the create modals: the agent types to filter by customer
+ * NAME or CODE, and the first (top) match is highlighted — unlike a native
+ * select, which scrolls the current value to the bottom.
+ *
+ * The dropdown is portaled to <body> and fixed-positioned so it is never
+ * clipped by a modal's overflow-auto (the create modals) — same approach as
+ * DatabasePickerMulti.
  *
  * Data comes from the same /api/customers query the rest of the app uses
  * (shared cache via CUSTOMER_PICKER_QUERY_KEY).
  */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { listResource } from '@/api/resources'
@@ -59,6 +64,11 @@ export function CustomerCombobox({
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState(0)
+  const [menuRect, setMenuRect] = useState<{
+    top: number
+    left: number
+    width: number
+  } | null>(null)
 
   const containerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -90,18 +100,38 @@ export function CustomerCombobox({
     setHighlight(0)
   }, [query, open])
 
-  // Close when clicking outside; revert the query so the input shows the
-  // committed selection again.
+  // Position the portaled menu under the input; keep it anchored on scroll
+  // and resize.
+  useEffect(() => {
+    if (!open) return
+    function recompute() {
+      const r = inputRef.current?.getBoundingClientRect()
+      if (!r) return
+      setMenuRect({ top: r.bottom + 4, left: r.left, width: r.width })
+    }
+    recompute()
+    window.addEventListener('resize', recompute)
+    window.addEventListener('scroll', recompute, true)
+    return () => {
+      window.removeEventListener('resize', recompute)
+      window.removeEventListener('scroll', recompute, true)
+    }
+  }, [open])
+
+  // Close when clicking outside the input AND the portaled menu; revert the
+  // query so the input shows the committed selection again.
   useEffect(() => {
     if (!open) return
     function onDocMouseDown(e: MouseEvent) {
+      const t = e.target as Node
       if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
+        (containerRef.current && containerRef.current.contains(t)) ||
+        (listRef.current && listRef.current.contains(t))
       ) {
-        setOpen(false)
-        setQuery('')
+        return
       }
+      setOpen(false)
+      setQuery('')
     }
     document.addEventListener('mousedown', onDocMouseDown)
     return () => document.removeEventListener('mousedown', onDocMouseDown)
@@ -112,7 +142,7 @@ export function CustomerCombobox({
     if (!open) return
     const el = listRef.current?.children[highlight] as HTMLElement | undefined
     el?.scrollIntoView({ block: 'nearest' })
-  }, [highlight, open])
+  }, [highlight, open, menuRect])
 
   function commit(opt: Option | undefined) {
     if (!opt) return
@@ -167,49 +197,58 @@ export function CustomerCombobox({
         }}
         onKeyDown={onKeyDown}
       />
-      {open && (
-        <ul
-          ref={listRef}
-          role="listbox"
-          className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-md border border-border bg-white py-1 shadow-lg"
-        >
-          {options.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-gray-500">No matches.</li>
-          ) : (
-            options.map((opt, i) => {
-              const isHighlighted = i === highlight
-              const isSelected = opt.code === value
-              return (
-                <li
-                  key={opt.code === null ? '__all' : opt.code}
-                  role="option"
-                  aria-selected={isSelected}
-                  // onMouseDown fires before the input's blur, so the click
-                  // lands before the outside-click handler can close the list.
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    commit(opt)
-                  }}
-                  onMouseEnter={() => setHighlight(i)}
-                  className={clsx(
-                    'cursor-pointer px-3 py-1.5 text-sm',
-                    isHighlighted
-                      ? 'bg-secondary-100 text-gray-900'
-                      : 'text-gray-700',
-                    isSelected && 'font-semibold',
-                  )}
-                >
-                  {opt.code === null ? (
-                    opt.label
-                  ) : (
-                    <HighlightMatch label={opt.label} term={query} />
-                  )}
-                </li>
-              )
-            })
-          )}
-        </ul>
-      )}
+      {open &&
+        menuRect &&
+        createPortal(
+          <ul
+            ref={listRef}
+            role="listbox"
+            style={{
+              position: 'fixed',
+              top: menuRect.top,
+              left: menuRect.left,
+              width: menuRect.width,
+            }}
+            className="z-50 max-h-72 overflow-auto rounded-md border border-border bg-white py-1 shadow-lg"
+          >
+            {options.length === 0 ? (
+              <li className="px-3 py-2 text-sm text-gray-500">No matches.</li>
+            ) : (
+              options.map((opt, i) => {
+                const isHighlighted = i === highlight
+                const isSelected = opt.code === value
+                return (
+                  <li
+                    key={opt.code === null ? '__all' : opt.code}
+                    role="option"
+                    aria-selected={isSelected}
+                    // onMouseDown fires before the input's blur, so the click
+                    // lands before the outside-click handler can close it.
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      commit(opt)
+                    }}
+                    onMouseEnter={() => setHighlight(i)}
+                    className={clsx(
+                      'cursor-pointer px-3 py-1.5 text-sm',
+                      isHighlighted
+                        ? 'bg-secondary-100 text-gray-900'
+                        : 'text-gray-700',
+                      isSelected && 'font-semibold',
+                    )}
+                  >
+                    {opt.code === null ? (
+                      opt.label
+                    ) : (
+                      <HighlightMatch label={opt.label} term={query} />
+                    )}
+                  </li>
+                )
+              })
+            )}
+          </ul>,
+          document.body,
+        )}
     </div>
   )
 }

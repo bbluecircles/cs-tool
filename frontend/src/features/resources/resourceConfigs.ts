@@ -662,6 +662,8 @@ export const ppiDatasetsConfig: ResourceConfig = {
       pickerExcludeFromResource: 'ppi-datasets',
       pickerExcludeColumnKey: 'ppi_state',
       emphasize: true,
+      // Half-width so the Claim modal is a single 2-col row: Code | State.
+      createSpan: 1,
     },
     {
       key: 'ppi_detail', label: 'Detail', kind: 'flag', editable: true,

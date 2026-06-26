@@ -114,10 +114,11 @@ export function DatabasePickerMulti({
   // already-selected (chips). Search filters by substring.
   const candidates = useMemo<DbDatabaseRow[]>(() => {
     const all = dbsQ.data?.rows ?? []
-    const valueSet = new Set(values)
     const q = search.trim().toLowerCase()
+    // NOTE: selected values are intentionally NOT filtered out — they stay
+    // in the list (checkmarked) so the agent can toggle several in a row
+    // without the list shrinking/jumping or the menu closing.
     return all.filter((r) => {
-      if (valueSet.has(r.database_name)) return false
       if (excludedSet.has(r.database_name)) return false
       if (requireNoDischargeFeatures && !hasNoDischargeFeature(r)) return false
       if (requireDischargeFeatures && !hasAnyDischargeFeature(r)) return false
@@ -159,6 +160,18 @@ export function DatabasePickerMulti({
     setSearch('')
     // Refocus the input so the agent can keep typing without an extra
     // click — feels much faster when picking 5+ items.
+    inputRef.current?.focus()
+  }
+
+  // Toggle from the dropdown list. Selected items stay in the list
+  // (checkmarked), the menu stays open, and focus stays on the input — so
+  // the agent can click several states in a row, "ctrl-click" style.
+  function toggle(name: string) {
+    if (values.includes(name)) {
+      onChange(values.filter((v) => v !== name))
+    } else {
+      onChange([...values, name])
+    }
     inputRef.current?.focus()
   }
 
@@ -267,9 +280,14 @@ export function DatabasePickerMulti({
               // — matches Gmail/Slack recipient pickers.
               remove(values[values.length - 1]!)
             }
-            if (e.key === 'Enter' && candidates.length > 0 && !excludeIsLoading) {
-              e.preventDefault()
-              add(candidates[0]!.database_name)
+            if (e.key === 'Enter' && !excludeIsLoading) {
+              const firstUnselected = candidates.find(
+                (c) => !values.includes(c.database_name),
+              )
+              if (firstUnselected) {
+                e.preventDefault()
+                add(firstUnselected.database_name)
+              }
             }
             if (e.key === 'Escape') setOpen(false)
           }}
@@ -304,21 +322,39 @@ export function DatabasePickerMulti({
                   : 'No available states.'}
               </div>
             ) : (
-              candidates.map((c) => (
-                <button
-                  key={c.database_name}
-                  type="button"
-                  className="block w-full text-left px-3 py-1.5 text-sm uppercase hover:bg-secondary-100/50"
-                  onMouseDown={(e) => {
-                    // Use mousedown so the menu doesn't close from
-                    // the input's onBlur before the click registers.
-                    e.preventDefault()
-                    add(c.database_name)
-                  }}
-                >
-                  {c.database_name}
-                </button>
-              ))
+              candidates.map((c) => {
+                const isSel = values.includes(c.database_name)
+                return (
+                  <button
+                    key={c.database_name}
+                    type="button"
+                    className={clsx(
+                      'flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm uppercase hover:bg-secondary-100/50',
+                      isSel && 'bg-secondary-100/60',
+                    )}
+                    onMouseDown={(e) => {
+                      // mousedown (not click) so the menu doesn't close from
+                      // the input blur before this registers. toggle keeps
+                      // the menu open for rapid multi-select.
+                      e.preventDefault()
+                      toggle(c.database_name)
+                    }}
+                  >
+                    <span
+                      className={clsx(
+                        'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border text-[10px]',
+                        isSel
+                          ? 'border-secondary-500 bg-secondary-500 text-white'
+                          : 'border-gray-300 text-transparent',
+                      )}
+                      aria-hidden
+                    >
+                      ✓
+                    </span>
+                    {c.database_name}
+                  </button>
+                )
+              })
             )}
             {excludeQ.data && excludedSet.size > 0 && (
               <div className="border-t border-border px-3 py-1.5 text-[11px] text-gray-500">
