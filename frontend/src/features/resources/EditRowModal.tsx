@@ -265,6 +265,7 @@ function FieldInput({
         value={typeof value === 'string' && value !== '' ? value : null}
         onChange={(v) => onChange(v)}
         className={cls}
+        emphasize={false}
         requireDischargeFeatures={column.pickerRequireDischargeFeatures}
         requireNoDischargeFeatures={column.pickerRequireNoDischargeFeatures}
       />

@@ -419,10 +419,18 @@ export const customerUsersConfig: ResourceConfig = {
       editable: false, showInCreate: false,
     },
     {
+      // Email + password sit full-width (span 2), email on top, in the
+      // create form. Order here also drives the table's default column order.
+      key: 'e_mail', label: 'Email', kind: 'text', editable: true,
+      maxLength: 200, showInCreate: true, requiredOnCreate: true,
+      createSpan: 2,
+    },
+    {
       key: 'user_password', label: 'Password', kind: 'text', editable: true,
       maxLength: 15, isPassword: true,
       showInCreate: true, requiredOnCreate: true,
       filterable: false,
+      createSpan: 2,
     },
     // Pw Prefix: hidden everywhere per UX spec. Always created as 1
     // (Yes). Hidden from the create form via showInCreate: false; the
@@ -434,10 +442,6 @@ export const customerUsersConfig: ResourceConfig = {
       showInCreate: false,
       show: false,
     }),
-    {
-      key: 'e_mail', label: 'Email', kind: 'text', editable: true,
-      maxLength: 200, showInCreate: true, requiredOnCreate: true,
-    },
     {
       key: 'first_name', label: 'First', kind: 'text', editable: true,
       maxLength: 35, showInCreate: true, requiredOnCreate: true,

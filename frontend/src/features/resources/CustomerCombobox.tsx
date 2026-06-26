@@ -21,6 +21,8 @@ interface CustomerComboboxProps {
   allowAll?: boolean
   placeholder?: string
   className?: string
+  /** Apply the error border (used by the create form on a missing value). */
+  invalid?: boolean
 }
 
 interface Option {
@@ -39,6 +41,7 @@ export function CustomerCombobox({
   allowAll = false,
   placeholder = 'Search by name or code…',
   className,
+  invalid,
 }: CustomerComboboxProps) {
   const q = useQuery({
     queryKey: CUSTOMER_PICKER_QUERY_KEY,
@@ -149,7 +152,7 @@ export function CustomerCombobox({
         role="combobox"
         aria-expanded={open}
         aria-autocomplete="list"
-        className="input w-full"
+        className={clsx('input w-full', invalid && 'input-error')}
         placeholder={q.isLoading ? 'Loading customers…' : placeholder}
         disabled={disabled || q.isLoading}
         value={open ? query : selectedLabel}

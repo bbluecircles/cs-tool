@@ -227,7 +227,7 @@ export function DatabasePickerMulti({
         {values.map((v) => (
           <span
             key={v}
-            className="inline-flex items-center gap-1 rounded bg-secondary-100 text-secondary-700 px-1.5 py-0.5 text-xs font-bold uppercase"
+            className="inline-flex items-center gap-1 rounded bg-secondary-100 text-secondary-700 px-1.5 py-0.5 text-xs uppercase"
           >
             {v}
             {!disabled && (
@@ -308,7 +308,7 @@ export function DatabasePickerMulti({
                 <button
                   key={c.database_name}
                   type="button"
-                  className="block w-full text-left px-3 py-1.5 text-sm font-bold uppercase hover:bg-secondary-100/50"
+                  className="block w-full text-left px-3 py-1.5 text-sm uppercase hover:bg-secondary-100/50"
                   onMouseDown={(e) => {
                     // Use mousedown so the menu doesn't close from
                     // the input's onBlur before the click registers.

@@ -146,6 +146,12 @@ interface DatabasePickerProps {
    * the agent has to actively pick something.
    */
   allowAll?: boolean
+  /**
+   * Render the value bold for visibility. Default true (table filter row +
+   * inline-edit cell). The create/edit modals pass false — bold stands out
+   * too much in a form. Uppercase is always applied.
+   */
+  emphasize?: boolean
 }
 
 export function DatabasePicker({
@@ -158,6 +164,7 @@ export function DatabasePicker({
   requireDischargeFeatures,
   requireNoDischargeFeatures,
   allowAll,
+  emphasize = true,
 }: DatabasePickerProps) {
   const q = useQuery({
     queryKey: ['db-database-picker'],
@@ -177,8 +184,9 @@ export function DatabasePicker({
 
   return (
     <select
-      // Database/state values render bold + uppercase for visibility.
-      className={clsx(className ?? 'input', 'font-bold uppercase')}
+      // Database/state values render uppercase; bold (default) in the table
+      // filter/inline-edit, off in the create/edit modals.
+      className={clsx(className ?? 'input', 'uppercase', emphasize && 'font-bold')}
       value={value ?? ''}
       disabled={disabled || q.isLoading}
       required={required}

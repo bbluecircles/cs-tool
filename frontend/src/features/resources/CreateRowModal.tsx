@@ -11,7 +11,7 @@ import clsx from 'clsx'
 import { ApiError } from '@/api/client'
 import { createResource } from '@/api/resources'
 import type { ColumnDef, ResourceConfig } from './resourceConfigs'
-import { CustomerPicker } from './CustomerPicker'
+import { CustomerCombobox } from './CustomerCombobox'
 import { DatabasePicker, useDbFeatures } from './DatabasePicker'
 import { DatabasePickerMulti } from './DatabasePickerMulti'
 import { ModalShell } from './ModalShell'
@@ -379,12 +379,11 @@ function FieldInput({
 
   if (column.kind === 'customer_code') {
     return (
-      <CustomerPicker
+      <CustomerCombobox
         value={typeof value === 'number' ? value : null}
         onChange={(v) => onChange(v)}
-        required={column.requiredOnCreate}
-        className={cls}
         disabled={disabled}
+        invalid={invalid}
       />
     )
   }
@@ -397,6 +396,7 @@ function FieldInput({
         required={column.requiredOnCreate}
         className={cls}
         disabled={disabled}
+        emphasize={false}
         requireDischargeFeatures={column.pickerRequireDischargeFeatures}
         requireNoDischargeFeatures={column.pickerRequireNoDischargeFeatures}
       />
