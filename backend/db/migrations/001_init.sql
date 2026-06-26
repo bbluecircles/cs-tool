@@ -34,6 +34,7 @@ GRANT GRANT OPTION ON *.* TO 'cs_tool_svc'@'%';
 
 GRANT ALL PRIVILEGES ON `secure`.*       TO 'cs_tool_svc'@'%';
 GRANT ALL PRIVILEGES ON `myuser`.*       TO 'cs_tool_svc'@'%';
+GRANT ALL PRIVILEGES ON `imic_control`.* TO 'cs_tool_svc'@'%';
 
 -- Read-only visibility elsewhere so we can introspect and so GRANT targets
 -- exist when we try to grant against them.

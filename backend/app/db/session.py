@@ -2,7 +2,7 @@
 
 We use SQLAlchemy Core (not the ORM) because:
   * Our workload is heavy on raw SQL (refresh scripts, GRANT statements).
-  * We need to span multiple schemas (secure, myuser) freely,
+  * We need to span multiple schemas (secure, myuser, imic_control) freely,
     which the ORM makes awkward.
   * We still want pooling, parameter binding, and a clean transaction API.
 

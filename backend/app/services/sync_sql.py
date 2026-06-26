@@ -254,6 +254,52 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         s.web_ed_access, s.web_claims_access
     FROM secure.user_details_internal_2026 s
     """,
+    # --- imic_control.user_details ---
+    "TRUNCATE TABLE imic_control.user_details",
+    """
+    INSERT IGNORE INTO imic_control.user_details
+    SELECT
+        s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
+        s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
+        s.logging_flag, s.claritas_flag, s.claritas_state,
+        s.first_name, s.last_name, s.entity_code,
+        s.prism_flag, s.projection_flag, s.max_bytes,
+        AES_ENCRYPT(s.user_password, SHA2('forget1c#)', 512)) AS user_password,
+        s.esri_access, s.esri_tap_access, s.esri_state,
+        s.webuser, s.ppiuser, s.mapping, s.user_priority,
+        s.max_birt_processes, s.cms_states, s.ppi_detail_user,
+        s.`5_digit_zip`, s.max_row_cnt, s.transfers_flag, s.dataset_type,
+        s.create_date, s.modify_date, s.pw_flag,
+        s.cell_size_limit, s.export_detail,
+        s.web_esri_access, s.web_esri_tap_access,
+        s.web_inpatient_access, s.web_outpatient_access,
+        s.web_ed_access, s.web_claims_access
+    FROM secure.user_details_internal s
+    """,
+    # --- imic_control.user_details_2023 (discharge datasets only) ---
+    "TRUNCATE TABLE imic_control.user_details_2023",
+    """
+    INSERT IGNORE INTO imic_control.user_details_2023
+    SELECT
+        s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
+        s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
+        s.logging_flag, s.claritas_flag, s.claritas_state,
+        s.first_name, s.last_name, s.entity_code,
+        s.prism_flag, s.projection_flag, s.max_bytes,
+        AES_ENCRYPT(s.user_password, SHA2('forget1c#)', 512)) AS user_password,
+        s.esri_access, s.esri_tap_access, s.esri_state,
+        s.webuser, s.ppiuser, s.mapping, s.user_priority,
+        s.max_birt_processes, s.cms_states, s.ppi_detail_user,
+        s.`5_digit_zip`, s.max_row_cnt, s.transfers_flag, s.dataset_type,
+        s.create_date, s.modify_date, s.pw_flag,
+        s.aprdrg_flag, s.export_flag, s.export_row_limit, s.webapp_flag,
+        s.cell_size_limit, s.export_detail,
+        s.web_esri_access, s.web_esri_tap_access,
+        s.web_inpatient_access, s.web_outpatient_access,
+        s.web_ed_access, s.web_claims_access
+    FROM secure.user_details_internal_2023 s
+    WHERE s.dataset_type = 'd'
+    """,
 )
 
 
@@ -417,9 +463,14 @@ _GRANT_GENERATORS: tuple[str, ...] = (
     WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
     """,
 
-    # myuser + volatile_data
+    # myuser + imic_control + volatile_data
     """
     SELECT CONCAT('GRANT SELECT ON `myuser`.* TO `', user_id, '`@`%`;')
+    FROM   secure.user_details_internal_2026
+    WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
+    """,
+    """
+    SELECT CONCAT('GRANT SELECT ON `imic_control`.* TO `', user_id, '`@`%`;')
     FROM   secure.user_details_internal_2026
     WHERE  `disable` = 0 AND customer_code = :cc GROUP BY user_id
     """,
