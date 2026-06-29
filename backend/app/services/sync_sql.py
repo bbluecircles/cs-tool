@@ -624,19 +624,13 @@ _REVOKE_CLEANUP_STATEMENTS: tuple[str, ...] = tuple(
 
 
 def _collect_revokes(conn: Connection, customer_code: int) -> list[str]:
-    """Collect REVOKE + DROP USER statements for every disabled user.
+    """Collect DROP USER statements for every disabled user."""
+    rows = conn.execute(
+        text(_DROP_USER_GENERATOR),
+        {"cc": customer_code},
+    ).all()
 
-    Ordering matters: REVOKE first, then DROP. The list is returned
-    as: [REVOKE u1, REVOKE u2, ..., DROP u1, DROP u2, ...].
-    """
-    stmts: list[str] = []
-    for generator in (_REVOKE_GENERATOR, _DROP_USER_GENERATOR):
-        rows = conn.execute(text(generator), {"cc": customer_code}).all()
-        for row in rows:
-            stmt = row[0]
-            if stmt:
-                stmts.append(stmt)
-    return stmts
+    return [row[0] for row in rows if row[0]]
 
 
 def revokes_for_customer(conn: Connection, customer_code: int) -> int:
