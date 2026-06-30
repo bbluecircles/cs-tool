@@ -14,10 +14,10 @@
  * If we touch field rendering again, extract a shared component. Both
  * modals would benefit, and divergence is a real risk over time.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ApiError } from '@/api/client'
-import { updateResource } from '@/api/resources'
+import { revealPassword, updateResource } from '@/api/resources'
 import type { ColumnDef, ResourceConfig } from './resourceConfigs'
 import { CustomerPicker } from './CustomerPicker'
 import { DatabasePicker } from './DatabasePicker'
@@ -68,13 +68,70 @@ export function EditRowModal({
 
   // Initialize values from the row. We track all editable fields so a
   // "no changes" check is just shallow-equality against the seed.
-  const [seed] = useState<Record<string, unknown>>(() => {
+  const [seed, setSeed] = useState<Record<string, unknown>>(() => {
     const out: Record<string, unknown> = {}
     for (const c of editableFields) out[c.key] = row[c.key] ?? null
     return out
   })
   const [values, setValues] = useState<Record<string, unknown>>(seed)
   const [errors, setErrors] = useState<Record<string, string>>({})
+
+  // Password columns aren't returned by the list endpoint, so the row
+  // carries no value for them — the input would render empty. Fetch the
+  // current password on open (audited server-side) and seed it so the
+  // field shows the real value, masked, with a reveal toggle. Seeding
+  // BOTH seed and values means an untouched password isn't counted as a
+  // change; an edited one is.
+  const passwordCols = useMemo(
+    () => editableFields.filter((c) => c.isPassword),
+    [editableFields],
+  )
+  const [pwLoading, setPwLoading] = useState(passwordCols.length > 0)
+  const [pwError, setPwError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (passwordCols.length === 0) return
+    const uid = row.user_id
+    const cc = row.customer_code
+    if (uid === undefined || uid === null || cc === undefined || cc === null) {
+      setPwLoading(false)
+      return
+    }
+    let cancelled = false
+    setPwLoading(true)
+    setPwError(null)
+    revealPassword(String(uid), Number(cc))
+      .then((r) => {
+        if (cancelled) return
+        const pw = r.user_password
+        setSeed((prev) => {
+          const next = { ...prev }
+          for (const c of passwordCols) next[c.key] = pw
+          return next
+        })
+        setValues((prev) => {
+          const next = { ...prev }
+          for (const c of passwordCols) {
+            // Don't clobber an edit the agent already started typing.
+            if (shallowEqual(prev[c.key], seed[c.key])) next[c.key] = pw
+          }
+          return next
+        })
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setPwError(e instanceof Error ? e.message : 'Failed to load password')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPwLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+    // Run once on open. seed/passwordCols are stable for the modal's life.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const m = useMutation({
     mutationFn: (changes: Record<string, unknown>) => {
@@ -164,7 +221,10 @@ export function EditRowModal({
             key={col.key}
             column={col}
             value={values[col.key]}
-            error={errors[col.key]}
+            error={
+              errors[col.key] ?? (col.isPassword ? pwError ?? undefined : undefined)
+            }
+            loading={col.isPassword ? pwLoading : false}
             onChange={(v) =>
               setValues((prev) => ({ ...prev, [col.key]: v }))
             }
@@ -211,11 +271,13 @@ function FieldRow({
   column,
   value,
   error,
+  loading,
   onChange,
 }: {
   column: ColumnDef
   value: unknown
   error?: string
+  loading?: boolean
   onChange: (v: unknown) => void
 }) {
   const spanClass =
@@ -230,6 +292,7 @@ function FieldRow({
         value={value}
         onChange={onChange}
         invalid={!!error}
+        loading={loading}
       />
       {error && <div className="text-[11px] text-error-600">{error}</div>}
     </div>
@@ -241,13 +304,27 @@ function FieldInput({
   value,
   onChange,
   invalid,
+  loading,
 }: {
   column: ColumnDef
   value: unknown
   onChange: (v: unknown) => void
   invalid?: boolean
+  loading?: boolean
 }) {
   const cls = `input ${invalid ? 'input-error' : ''}`
+
+  if (column.isPassword) {
+    return (
+      <PasswordField
+        value={value}
+        onChange={onChange}
+        invalid={invalid}
+        loading={loading}
+        maxLength={column.maxLength}
+      />
+    )
+  }
 
   if (column.kind === 'customer_code') {
     return (
@@ -338,5 +415,51 @@ function FieldInput({
       maxLength={column.maxLength}
       onChange={(e) => onChange(e.target.value)}
     />
+  )
+}
+
+/**
+ * Password input: masked by default with an inline reveal/hide toggle.
+ * The value is the user's real password (fetched on modal open). While
+ * that fetch is in flight the input is disabled and shows a placeholder.
+ */
+function PasswordField({
+  value,
+  onChange,
+  invalid,
+  loading,
+  maxLength,
+}: {
+  value: unknown
+  onChange: (v: unknown) => void
+  invalid?: boolean
+  loading?: boolean
+  maxLength?: number
+}) {
+  const [revealed, setRevealed] = useState(false)
+  const cls = `input pr-14 ${invalid ? 'input-error' : ''}`
+  return (
+    <div className="relative">
+      <input
+        type={revealed ? 'text' : 'password'}
+        className={cls}
+        value={
+          typeof value === 'string' ? value : value == null ? '' : String(value)
+        }
+        placeholder={loading ? 'Loading…' : ''}
+        disabled={loading}
+        maxLength={maxLength}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button
+        type="button"
+        onClick={() => setRevealed((v) => !v)}
+        disabled={loading}
+        tabIndex={-1}
+        className="absolute inset-y-0 right-2 my-auto text-[11px] text-secondary-500 hover:text-secondary-700 disabled:opacity-50"
+      >
+        {revealed ? 'hide' : 'reveal'}
+      </button>
+    </div>
   )
 }

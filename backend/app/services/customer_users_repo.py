@@ -286,6 +286,18 @@ def update_customer_user(
         set_clauses.append(f"`{col}` = :{key}")
         params[key] = val
 
+    # Stamp/clear disable_date whenever the disable flag is toggled.
+    # Disabling (1) records when it happened; re-enabling (0) clears the
+    # stale date so disable_date always reflects the current disable state.
+    if "disable" in changes:
+        try:
+            disabling = int(changes["disable"]) == 1
+        except (TypeError, ValueError):
+            disabling = bool(changes["disable"])
+        set_clauses.append(
+            "`disable_date` = NOW()" if disabling else "`disable_date` = NULL"
+        )
+
     conn.execute(
         text(
             f"UPDATE secure.customer_users SET {', '.join(set_clauses)}, "
