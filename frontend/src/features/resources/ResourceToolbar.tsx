@@ -62,9 +62,11 @@ export function ResourceToolbar({
       {hasFilters && (
         <button
           type="button"
-          className="btn-ghost"
           onClick={() => onFiltersChange([])}
+          title="Remove all active column filters"
+          className="inline-flex items-center gap-1.5 rounded-md border border-secondary-500 bg-secondary-100/60 px-3 py-2 text-sm font-medium text-secondary-700 shadow-sm hover:bg-secondary-100 focus:outline-none focus:ring-2 focus:ring-focus-ring"
         >
+          <span aria-hidden className="text-base leading-none">✕</span>
           Clear all filters ({filters.length})
         </button>
       )}

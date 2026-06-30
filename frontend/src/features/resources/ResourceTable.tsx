@@ -112,7 +112,7 @@ export function ResourceTable({
 
   // --- column reordering (drag headers; persisted per table via localStorage) ---
   const [columnOrder, setColumnOrder] = useState<string[]>(() =>
-    loadColumnOrder(config.slug, visibleConfigCols),
+    loadColumnOrder(config.slug, visibleConfigCols, config.tableColumnOrder),
   )
   useEffect(() => {
     try {
@@ -768,23 +768,43 @@ function predictColumnWidthPx(col: ResourceColumnDef): number {
 
 // --- column-order persistence (localStorage, per table) -------------------
 
-const COL_ORDER_PREFIX = 'cs-tool:colorder:'
+// v2: bumped when the default column order changed (Users left-shift) so
+// stored orders from before don't mask the new default. Old keys are
+// simply abandoned (harmless localStorage cruft).
+const COL_ORDER_PREFIX = 'cs-tool:colorder:v2:'
 
 function colOrderKey(slug: string): string {
   return COL_ORDER_PREFIX + slug
 }
 
-function defaultColumnOrder(cols: ResourceColumnDef[]): string[] {
+function defaultColumnOrder(
+  cols: ResourceColumnDef[],
+  preferred?: string[],
+): string[] {
+  if (preferred && preferred.length > 0) {
+    const visibleKeys = new Set(cols.map((c) => c.key))
+    // Preferred keys first (only those actually visible), then the rest in
+    // config order, then the pinned actions column.
+    const head = preferred.filter((k) => visibleKeys.has(k))
+    const headSet = new Set(head)
+    const tail = cols.map((c) => c.key).filter((k) => !headSet.has(k))
+    return [...head, ...tail, '__actions']
+  }
   return [...cols.map((c) => c.key), '__actions']
 }
 
 /**
  * Load the saved column order for a table, reconciled against the current
  * columns: unknown ids are dropped, newly-added columns are appended, and
- * the trailing actions column is always pinned last.
+ * the trailing actions column is always pinned last. `preferred` sets the
+ * default order used when nothing is stored yet (config.tableColumnOrder).
  */
-function loadColumnOrder(slug: string, cols: ResourceColumnDef[]): string[] {
-  const def = defaultColumnOrder(cols)
+function loadColumnOrder(
+  slug: string,
+  cols: ResourceColumnDef[],
+  preferred?: string[],
+): string[] {
+  const def = defaultColumnOrder(cols, preferred)
   try {
     const raw = localStorage.getItem(colOrderKey(slug))
     if (!raw) return def

@@ -173,6 +173,15 @@ export interface ResourceConfig {
   columns: ColumnDef[]
   /** Sortable columns. Must match the backend repo's SORTABLE_COLUMNS. */
   sortableColumns: Set<string>
+  /**
+   * Optional default left-to-right column order for the TABLE, by column
+   * key. Keys listed here come first (in this order); any remaining
+   * visible columns follow in `columns` array order; the actions column
+   * stays pinned last. Does NOT affect the create form (which always
+   * follows `columns` order). Drag-to-reorder still overrides this and
+   * persists per user. Omit to default to `columns` order.
+   */
+  tableColumnOrder?: string[]
   /** Whether the toolbar shows a customer_code filter dropdown. */
   filterByCustomerCode: boolean
   /**
@@ -393,6 +402,13 @@ export const customerUsersConfig: ResourceConfig = {
   // No toolbar customer dropdown — filter by customer via the per-column
   // Code (int) / Customer (text) inputs, like the Customers tab.
   filterByCustomerCode: false,
+  // Default table order: pull the columns CS filters on most (customer
+  // code / user id / customer / name / email / password) to the left.
+  // Everything else trails in `columns` order. Create form is unaffected.
+  tableColumnOrder: [
+    'customer_code', 'user_id', 'customer_name',
+    'first_name', 'last_name', 'e_mail', 'user_password',
+  ],
   allowDelete: false,
   columns: [
     {
@@ -451,13 +467,13 @@ export const customerUsersConfig: ResourceConfig = {
     // PPI: hidden everywhere per UX spec. Defaults to 0 (No). The
     // create flow doesn't surface it.
     flag('ppiuser', 'PPI', { showInCreate: false, show: false }),
-    // ESRI / ESRI TAP: removed from the create form per UX spec. New
-    // users default to No (0) — the field simply isn't sent, and the
+    // ESRI / ESRI TAP: hidden from BOTH the create form and the table per
+    // UX spec. New users default to No (0) — the field isn't sent and the
     // backend's create defaults (data.get("esri_access", 0)) handle it.
-    // Still visible and inline-editable in the table. The Web ESRI / Web
-    // ESRI TAP versions below DELIBERATELY stay on the create form.
-    flag('esri_access', 'ESRI', { showInCreate: false }),
-    flag('esri_tap_access', 'ESRI TAP', { showInCreate: false }),
+    // Underlying columns still exist in secure.customer_users. The Web
+    // ESRI / Web ESRI TAP versions below DELIBERATELY stay visible.
+    flag('esri_access', 'ESRI', { showInCreate: false, show: false }),
+    flag('esri_tap_access', 'ESRI TAP', { showInCreate: false, show: false }),
     flag('ppi_detail_user', 'PPI Detail'),
     flag('web_inpatient_access', 'Web IP'),
     flag('web_outpatient_access', 'Web OP'),
