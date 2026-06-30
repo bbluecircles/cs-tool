@@ -22,10 +22,22 @@ interface CustomerSearchSelectProps {
   /** Error border (used by the create form on a missing value). */
   invalid?: boolean
   className?: string
+  /**
+   * When true, customers with a cancelled_date are visually flagged
+   * (greyed + a "cancelled" badge in the dropdown, plus a note under the
+   * box when one is selected). They stay SELECTABLE — the admin
+   * Remove-grants flow legitimately needs to act on cancelled customers.
+   * Used by the Admin page; off everywhere else.
+   */
+  markCancelled?: boolean
 }
 
 function label(r: CustomerRow): string {
   return `${r.customer_name ?? '(unnamed)'} — code ${r.customer_code}`
+}
+
+function isCancelled(r: CustomerRow): boolean {
+  return r.cancelled_date != null && String(r.cancelled_date).trim() !== ''
 }
 
 export function CustomerSearchSelect({
@@ -34,6 +46,7 @@ export function CustomerSearchSelect({
   disabled,
   invalid,
   className,
+  markCancelled,
 }: CustomerSearchSelectProps) {
   const q = useQuery({
     queryKey: CUSTOMER_PICKER_QUERY_KEY,
@@ -53,6 +66,7 @@ export function CustomerSearchSelect({
     return m
   }, [rows])
   const selected = value != null ? byCode.get(value) ?? null : null
+  const selectedCancelled = !!markCancelled && selected != null && isCancelled(selected)
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -206,6 +220,11 @@ export function CustomerSearchSelect({
           ✕
         </button>
       )}
+      {selectedCancelled && !open && (
+        <p className="mt-1 text-[11px] font-medium text-warning-600">
+          ⚠ This customer is cancelled.
+        </p>
+      )}
       {open &&
         menuRect &&
         createPortal(
@@ -226,6 +245,7 @@ export function CustomerSearchSelect({
               options.map((r, i) => {
                 const isHighlighted = i === highlight
                 const isSelected = r.customer_code === value
+                const cancelled = !!markCancelled && isCancelled(r)
                 return (
                   <li
                     key={r.customer_code}
@@ -240,12 +260,19 @@ export function CustomerSearchSelect({
                       'flex cursor-pointer items-baseline gap-2 px-3 py-1.5 text-sm',
                       isHighlighted
                         ? 'bg-secondary-100 text-gray-900'
-                        : 'text-gray-700',
+                        : cancelled
+                          ? 'text-gray-400'
+                          : 'text-gray-700',
                     )}
                   >
                     <span className={clsx('flex-1 truncate', isSelected && 'font-semibold')}>
                       {r.customer_name ?? '(unnamed)'}
                     </span>
+                    {cancelled && (
+                      <span className="shrink-0 rounded bg-warning-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-warning-600">
+                        cancelled
+                      </span>
+                    )}
                     <span className="shrink-0 text-xs text-gray-400">
                       code {r.customer_code}
                     </span>

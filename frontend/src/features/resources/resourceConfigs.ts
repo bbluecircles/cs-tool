@@ -462,7 +462,10 @@ export const customerUsersConfig: ResourceConfig = {
       key: 'last_name', label: 'Last', kind: 'text', editable: true,
       maxLength: 35, showInCreate: true, requiredOnCreate: true,
     },
-    flag('disable', 'Disabled', { createDefault: 0 }),
+    // Disabled: not on the create form — new users are always created
+    // active (disable = 0, applied by the backend). Still visible and
+    // inline-editable in the table (which also stamps disable_date).
+    flag('disable', 'Disabled', { createDefault: 0, showInCreate: false }),
     flag('webuser', 'Web', { createDefault: 1 }),
     // PPI: hidden everywhere per UX spec. Defaults to 0 (No). The
     // create flow doesn't surface it.

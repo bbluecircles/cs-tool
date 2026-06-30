@@ -65,6 +65,7 @@ function SyncCard() {
         <CustomerSearchSelect
           value={customerCode}
           onChange={handleCustomerChange}
+          markCancelled
         />
       </div>
 

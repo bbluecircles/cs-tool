@@ -16,6 +16,10 @@ export interface CustomerRow {
   customer_code: number
   customer_name: string | null
   entity_code: string | null
+  /** Set (datetime string) when the customer has been cancelled. The
+   *  /api/customers payload already includes this; the admin customer
+   *  picker uses it to flag cancelled customers. */
+  cancelled_date?: string | null
 }
 
 /** react-query key shared by the picker, the filter dropdown, and the
