@@ -451,8 +451,13 @@ export const customerUsersConfig: ResourceConfig = {
     // PPI: hidden everywhere per UX spec. Defaults to 0 (No). The
     // create flow doesn't surface it.
     flag('ppiuser', 'PPI', { showInCreate: false, show: false }),
-    flag('esri_access', 'ESRI'),
-    flag('esri_tap_access', 'ESRI TAP'),
+    // ESRI / ESRI TAP: removed from the create form per UX spec. New
+    // users default to No (0) — the field simply isn't sent, and the
+    // backend's create defaults (data.get("esri_access", 0)) handle it.
+    // Still visible and inline-editable in the table. The Web ESRI / Web
+    // ESRI TAP versions below DELIBERATELY stay on the create form.
+    flag('esri_access', 'ESRI', { showInCreate: false }),
+    flag('esri_tap_access', 'ESRI TAP', { showInCreate: false }),
     flag('ppi_detail_user', 'PPI Detail'),
     flag('web_inpatient_access', 'Web IP'),
     flag('web_outpatient_access', 'Web OP'),
