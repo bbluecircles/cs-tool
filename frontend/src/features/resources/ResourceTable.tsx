@@ -203,6 +203,28 @@ export function ResourceTable({
     enabled: hasReadonlyCustomerCode,
   })
 
+  // Keep the volatile per-render state/handlers in refs so the `columns`
+  // memo can stay referentially STABLE. If `columns` is rebuilt on every
+  // keystroke (which it was, because `dirty` is a fresh object each render
+  // and was in the deps), TanStack remounts the cells — the open inline
+  // editor's input is destroyed mid-type, so it loses focus and `editing`
+  // resets, and focus then lands on the freshly-enabled Save button where
+  // the next keypress fires it (the stray save-confirmation popup). The
+  // cells still re-render every table render and read ref.current, so the
+  // dirty tint / pending value / Save-enabled state stay live.
+  const dirtyRef = useRef(dirty)
+  dirtyRef.current = dirty
+  const savingRowKeyRef = useRef(savingRowKey)
+  savingRowKeyRef.current = savingRowKey
+  const onSaveRowRef = useRef(onSaveRow)
+  onSaveRowRef.current = onSaveRow
+  const onDiscardRowRef = useRef(onDiscardRow)
+  onDiscardRowRef.current = onDiscardRow
+  const onDeleteRowRef = useRef(onDeleteRow)
+  onDeleteRowRef.current = onDeleteRow
+  const onCancelRowRef = useRef(onCancelRow)
+  onCancelRowRef.current = onCancelRow
+
   const columns = useMemo<ColumnDef<Row>[]>(() => {
     const tableCols: ColumnDef<Row>[] = visibleConfigCols.map((col) => {
       // Sortable by default. The previous logic gated this on a frontend
@@ -221,9 +243,9 @@ export function ResourceTable({
           cell: ({ row }) => {
             const rowObj = row.original as Row
             const key = config.rowKey(rowObj)
-            const pending = dirty.getDirty(key)[col.key]
-            const isDirty = dirty.isDirty(key, col.key)
-            const isSaving = savingRowKey === key
+            const pending = dirtyRef.current.getDirty(key)[col.key]
+            const isDirty = dirtyRef.current.isDirty(key, col.key)
+            const isSaving = savingRowKeyRef.current === key
             const userId = String(rowObj.user_id ?? '')
             const customerCode = Number(rowObj.customer_code ?? 0)
             return (
@@ -240,7 +262,7 @@ export function ResourceTable({
                   dirty={isDirty}
                   disabled={isSaving}
                   onCommit={(v) =>
-                    dirty.setField(key, col.key, v, rowObj[col.key])
+                    dirtyRef.current.setField(key, col.key, v, rowObj[col.key])
                   }
                 />
               </div>
@@ -257,9 +279,9 @@ export function ResourceTable({
         cell: ({ row }) => {
           const rowObj = row.original as Row
           const key = config.rowKey(rowObj)
-          const pending = dirty.getDirty(key)[col.key]
-          const isDirty = dirty.isDirty(key, col.key)
-          const isSaving = savingRowKey === key
+          const pending = dirtyRef.current.getDirty(key)[col.key]
+          const isDirty = dirtyRef.current.isDirty(key, col.key)
+          const isSaving = savingRowKeyRef.current === key
 
           if (!col.editable) {
             // customer_code cells: resolve the bare integer to the
@@ -315,7 +337,7 @@ export function ResourceTable({
               dirty={isDirty}
               disabled={cellDisabled}
               onCommit={(v) =>
-                dirty.setField(key, col.key, v, rowObj[col.key])
+                dirtyRef.current.setField(key, col.key, v, rowObj[col.key])
               }
             />
           )
@@ -331,14 +353,14 @@ export function ResourceTable({
       cell: ({ row }) => {
         const rowObj = row.original as Row
         const key = config.rowKey(rowObj)
-        const has = dirty.hasDirty(key)
-        const isSaving = savingRowKey === key
+        const has = dirtyRef.current.hasDirty(key)
+        const isSaving = savingRowKeyRef.current === key
         return (
           <div className="flex items-center gap-1 min-w-[150px]">
             <button
               type="button"
               disabled={!has || isSaving}
-              onClick={() => onSaveRow(rowObj)}
+              onClick={() => onSaveRowRef.current(rowObj)}
               className={clsx(
                 'text-xs px-2 py-0.5 rounded font-medium',
                 has && !isSaving
@@ -351,7 +373,7 @@ export function ResourceTable({
             <button
               type="button"
               disabled={!has || isSaving}
-              onClick={() => onDiscardRow(rowObj)}
+              onClick={() => onDiscardRowRef.current(rowObj)}
               className={clsx(
                 'text-xs px-2 py-0.5 rounded',
                 has && !isSaving
@@ -361,10 +383,10 @@ export function ResourceTable({
             >
               Discard
             </button>
-            {config.allowDelete && onDeleteRow && (
+            {config.allowDelete && onDeleteRowRef.current && (
               <button
                 type="button"
-                onClick={() => onDeleteRow(rowObj)}
+                onClick={() => onDeleteRowRef.current?.(rowObj)}
                 disabled={isSaving}
                 className="text-xs px-2 py-0.5 rounded text-error-600 hover:bg-error-100 disabled:opacity-50"
                 title="Permanently delete this row"
@@ -372,10 +394,10 @@ export function ResourceTable({
                 Delete
               </button>
             )}
-            {config.allowCancel && onCancelRow && (
+            {config.allowCancel && onCancelRowRef.current && (
               <button
                 type="button"
-                onClick={() => onCancelRow(rowObj)}
+                onClick={() => onCancelRowRef.current?.(rowObj)}
                 disabled={isSaving}
                 className="text-xs px-2 py-0.5 rounded text-warning-600 hover:bg-warning-100 disabled:opacity-50"
                 title="Set the cancelled date to today"
@@ -389,10 +411,12 @@ export function ResourceTable({
     })
 
     return tableCols
-  }, [
-    visibleConfigCols, config, dirty, onDeleteRow, onCancelRow, onDiscardRow,
-    onSaveRow, savingRowKey, qc, dbFeaturesQuery.data, customerPickerQuery.data,
-  ])
+    // Deliberately STABLE deps — `columns` must not be rebuilt on every
+    // keystroke (see the refs above). Volatile state/handlers are read via
+    // refs inside the cells; the conditional Delete/Cancel buttons key off
+    // config (stable), so onDeleteRow/onCancelRow identity isn't needed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleConfigCols, config, qc, dbFeaturesQuery.data, customerPickerQuery.data])
 
   const table = useReactTable({
     data: rows,
