@@ -17,7 +17,7 @@
  * canonical filter list; this component is presentational and tells the
  * parent when to update.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ColumnDef, FilterKind } from './resourceConfigs'
 import { effectiveFilterKind } from './resourceConfigs'
 import type { ResourceFilter } from '@/api/resources'
@@ -297,23 +297,46 @@ function DateRangeFilter({
     onChange(next)
   }
 
+  // Native date inputs are UNCONTROLLED here, same as the inline editor:
+  // a controlled value re-applied mid-edit freezes a half-typed year
+  // (the first year digit zero-pads to a valid date like 0002-02-04).
+  // We read the DOM values and emit on blur / Enter. The wrapper is keyed
+  // on the committed range so an external change (e.g. clearing filters)
+  // remounts the inputs with fresh defaultValues, while typing — which
+  // doesn't move the committed value until blur — leaves them mounted so
+  // the full year can be typed.
+  const fromRef = useRef<HTMLInputElement>(null)
+  const toRef = useRef<HTMLInputElement>(null)
+
+  function commit() {
+    emit(fromRef.current?.value ?? '', (toRef.current?.value ?? '').slice(0, 10))
+  }
+
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1" key={`${fromValue}|${toValue}`}>
       <input
+        ref={fromRef}
         type="date"
         className="input py-0.5 px-1 text-xs w-full"
-        value={fromValue}
-        onChange={(e) => emit(e.target.value, toValue.slice(0, 10))}
+        defaultValue={fromValue}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+        }}
         title="From"
       />
       <span className="text-[10px] text-gray-400">–</span>
       <input
+        ref={toRef}
         type="date"
         className="input py-0.5 px-1 text-xs w-full"
         // The displayed `to` value is the date portion of the stored
         // "YYYY-MM-DD 23:59:59" string.
-        value={toValue.slice(0, 10)}
-        onChange={(e) => emit(fromValue, e.target.value)}
+        defaultValue={toValue.slice(0, 10)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+        }}
         title="To"
       />
     </div>

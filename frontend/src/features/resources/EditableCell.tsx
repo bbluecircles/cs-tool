@@ -155,23 +155,46 @@ function DateInput({
     typeof initial === 'string' && initial.length >= 10
       ? initial.slice(0, 10)
       : ''
-  const [value, setValue] = useState(initialDate)
+  // UNCONTROLLED on purpose. A native <input type="date"> edits in
+  // segments (MM/DD/YYYY). If we commit on every keystroke, the first
+  // year digit zero-pads to a *valid* date (e.g. 0002-02-04), and React
+  // re-applying that as a controlled `value` makes the browser finalize
+  // the year at 0002 — you can't finish typing 2020. So we leave the DOM
+  // input to manage its own segment state (defaultValue) and only read +
+  // commit the value on blur / Enter.
+  const ref = useRef<HTMLInputElement>(null)
+  const finalized = useRef(false)
+
+  function commitAndClose() {
+    if (finalized.current) return
+    finalized.current = true
+    const v = ref.current?.value ?? ''
+    onLiveChange(v === '' ? null : v)
+    onClose()
+  }
+  function cancel() {
+    if (finalized.current) return
+    finalized.current = true
+    onCancel()
+  }
+
   return (
     <input
+      ref={ref}
       type="date"
       autoFocus
+      defaultValue={initialDate}
       className="input py-0.5 px-1 text-xs w-auto"
-      value={value}
-      onChange={(e) => {
-        setValue(e.target.value)
-        onLiveChange(e.target.value === '' ? null : e.target.value)
-      }}
-      onBlur={onClose}
+      // Blur fires during unmount after Enter/Escape too; the finalized
+      // guard makes that a no-op so a revert (Escape) isn't overwritten.
+      onBlur={commitAndClose}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') onClose()
-        if (e.key === 'Escape') {
+        if (e.key === 'Enter') {
           e.preventDefault()
-          onCancel()
+          commitAndClose()
+        } else if (e.key === 'Escape') {
+          e.preventDefault()
+          cancel()
         }
       }}
     />

@@ -392,14 +392,18 @@ function FieldInput({
   }
 
   if (column.kind === 'datetime') {
-    // Native date input. Backend coerces YYYY-MM-DD strings.
+    // Native date input, UNCONTROLLED (defaultValue, not value). A
+    // controlled <input type="date"> freezes a half-typed year: the first
+    // year digit zero-pads to a valid date (e.g. 0002-02-04) and React
+    // re-applies it mid-edit, so you can't finish typing 2020. onChange
+    // still syncs the value for Save. Backend coerces YYYY-MM-DD strings.
     const initial =
       typeof value === 'string' && value.length >= 10 ? value.slice(0, 10) : ''
     return (
       <input
         type="date"
         className={cls}
-        value={initial}
+        defaultValue={initial}
         onChange={(e) =>
           onChange(e.target.value === '' ? null : e.target.value)
         }
