@@ -417,8 +417,11 @@ export function ResourcePage({ config }: ResourcePageProps) {
   }, [filters])
 
   return (
-    <div className="space-y-4">
-      <header>
+    // Flex column filling the tab area. Header / toolbar / banners /
+    // pagination are fixed-height; the ResourceTable flexes to fill and is
+    // the only scrolling region.
+    <div className="flex-1 min-h-0 flex flex-col gap-4">
+      <header className="shrink-0">
         <h1 className="text-xl font-semibold text-gray-900">{config.label}</h1>
         <p className="text-sm text-gray-500">{config.description}</p>
       </header>

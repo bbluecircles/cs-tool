@@ -24,8 +24,10 @@ export function ResourceTabs() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="border-b border-border flex gap-1 -mt-1">
+    // Fill the main area as a flex column: the tab bar is fixed-height and
+    // the ResourcePage below it takes the rest (its table scrolls within).
+    <div className="flex-1 min-h-0 flex flex-col gap-4">
+      <div className="border-b border-border flex gap-1 -mt-1 shrink-0">
         {ALL_CONFIGS.map((c) => (
           <NavLink
             key={c.slug}

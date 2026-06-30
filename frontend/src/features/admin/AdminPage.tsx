@@ -11,7 +11,9 @@ import { CustomerSearchSelect } from '@/features/resources/CustomerSearchSelect'
 
 export function AdminPage() {
   return (
-    <div className="space-y-6">
+    // Fill the main area and scroll internally so the app body itself
+    // never scrolls (matches the resource pages' fixed-viewport layout).
+    <div className="flex-1 min-h-0 overflow-auto space-y-6">
       <SyncCard />
       <AuditCard />
     </div>

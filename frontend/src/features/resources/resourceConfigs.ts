@@ -633,6 +633,9 @@ export const ppiDatasetsConfig: ResourceConfig = {
       editable: false, showInCreate: true, requiredOnCreate: true,
       displayRaw: true,
       filterKind: 'int',
+      // Full-width so the Claim create modal is a single column: Code on
+      // top, the (growing) State multi-select stacked below it.
+      createSpan: 2,
     },
     {
       // Customer name: projected from secure.customer via JOIN in
@@ -658,8 +661,9 @@ export const ppiDatasetsConfig: ResourceConfig = {
       pickerExcludeFromResource: 'ppi-datasets',
       pickerExcludeColumnKey: 'ppi_state',
       emphasize: true,
-      // Half-width so the Claim modal is a single 2-col row: Code | State.
-      createSpan: 1,
+      // Full-width and stacked under Code (single-column modal) so the
+      // chip list can grow downward without looking cramped.
+      createSpan: 2,
     },
     {
       key: 'ppi_detail', label: 'Detail', kind: 'flag', editable: true,

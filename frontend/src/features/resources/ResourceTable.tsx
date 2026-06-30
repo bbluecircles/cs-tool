@@ -437,8 +437,10 @@ export function ResourceTable({
   }
 
   return (
-    <div className="card overflow-hidden">
-      <div className="overflow-auto max-h-[calc(100vh-300px)]">
+    // Fill the remaining height of the page flex column and let the inner
+    // div be the single scroll region (replaces the old max-h calc hack).
+    <div className="card overflow-hidden flex-1 min-h-0 flex flex-col">
+      <div className="overflow-auto flex-1 min-h-0">
         <table className="w-full text-sm border-collapse">
           {/* Predicted column widths (auto layout treats them as preferred):
               narrow-content columns settle near the prediction, long
