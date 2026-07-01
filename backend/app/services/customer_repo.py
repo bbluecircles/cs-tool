@@ -122,6 +122,24 @@ def get_customer(conn: Connection, customer_code: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def next_entity_code(conn: Connection) -> tuple[int | None, int]:
+    """Largest existing entity_code (numeric) and the next value (max + 1).
+
+    entity_code is stored as VARCHAR, so a plain MAX() would sort
+    lexicographically ("9" > "842"). We CAST to UNSIGNED for a numeric max
+    instead. Empty / non-numeric values cast to 0 and are effectively
+    ignored. Returns (max_or_None, next); max is None only when the table
+    has no rows at all, in which case next is 1.
+    """
+    max_code = conn.execute(
+        text(
+            "SELECT MAX(CAST(`entity_code` AS UNSIGNED)) FROM secure.customer"
+        )
+    ).scalar_one()
+    max_int = int(max_code) if max_code is not None else None
+    return max_int, (max_int or 0) + 1
+
+
 def create_customer(conn: Connection, data: dict[str, Any]) -> int:
     """Insert a new customer. customer_code is taken as MAX+1 since the
     schema uses it as a business key rather than AUTO_INCREMENT."""
@@ -129,14 +147,14 @@ def create_customer(conn: Connection, data: dict[str, Any]) -> int:
         text("SELECT COALESCE(MAX(customer_code), 0) + 1 FROM secure.customer")
     ).scalar_one())
 
-    # entity_code defaults to customer_code when the caller doesn't
-    # specify one. This matches the convention in the existing data:
-    # most customers are their own entity, and cross-customer sharing is
-    # the exception (handled by explicitly setting entity_code to an
-    # existing bucket).
+    # entity_code auto-increments: when the caller doesn't specify one, it
+    # becomes the largest existing entity_code + 1 (computed here at insert
+    # time so the stored value is authoritative, not a stale UI preview).
+    # An explicit value in the payload is respected (the create form lets
+    # the agent override the suggestion).
     entity_code = data.get("entity_code")
-    if entity_code is None:
-        entity_code = customer_code
+    if entity_code is None or entity_code == "":
+        _, entity_code = next_entity_code(conn)
 
     conn.execute(
         text(

@@ -95,6 +95,21 @@ def create_customer(
     return CreateResponse(created=created)
 
 
+@router.get("/next-entity-code")
+def next_entity_code(
+    _: Annotated[CurrentAgent, Depends(get_current_agent)],
+) -> dict:
+    """Preview for the create form: the largest existing entity_code and
+    the value a new customer would get (max + 1). Defined BEFORE the
+    /{customer_code} route so the literal path isn't captured as a param.
+    The authoritative value is still computed at insert time in
+    create_customer; this is only the suggestion the modal displays.
+    """
+    with get_connection() as conn:
+        max_code, next_code = customer_repo.next_entity_code(conn)
+    return {"max_entity_code": max_code, "next_entity_code": next_code}
+
+
 @router.get("/{customer_code}")
 def get_customer(
     customer_code: int,

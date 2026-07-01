@@ -5,11 +5,11 @@
  * input (text / number / flag-select / enum-select / customer-code picker).
  * Required fields are enforced client-side; the backend validates too.
  */
-import { useMemo, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
 import { ApiError, apiErrorDetail } from '@/api/client'
-import { createResource } from '@/api/resources'
+import { createResource, fetchNextEntityCode } from '@/api/resources'
 import type { ColumnDef, ResourceConfig } from './resourceConfigs'
 import { CustomerSearchSelect } from './CustomerSearchSelect'
 import { DatabasePicker, useDbFeatures } from './DatabasePicker'
@@ -42,7 +42,9 @@ export function CreateRowModal({
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     const out: Record<string, unknown> = {}
     for (const c of createFields) {
-      out[c.key] = c.createDefault ?? defaultForKind(c)
+      // Auto-preview fields start empty; the fetched suggestion is seeded
+      // in once it loads (see the effect below).
+      out[c.key] = c.autoPreview ? '' : c.createDefault ?? defaultForKind(c)
     }
     // Pre-fill the customer when launched from a Code-filtered table.
     if (
@@ -54,6 +56,30 @@ export function CreateRowModal({
     return out
   })
   const [errors, setErrors] = useState<Record<string, string>>({})
+
+  // Auto-preview field (Customers' entity_code): fetch the suggested value
+  // (largest + 1) plus the current max for the hint. Seed it into the form
+  // once loaded, unless the agent already typed something. On submit it's
+  // omitted from the payload unless overridden, so the backend computes the
+  // authoritative value at insert time.
+  const autoField = useMemo(
+    () => createFields.find((c) => c.autoPreview),
+    [createFields],
+  )
+  const [autoTouched, setAutoTouched] = useState(false)
+  const entityPreview = useQuery({
+    queryKey: ['customer-entity-code-preview'],
+    queryFn: fetchNextEntityCode,
+    enabled: autoField?.autoPreview === 'customer-entity-code',
+    staleTime: 0,
+  })
+
+  useEffect(() => {
+    if (!autoField || autoTouched) return
+    const next = entityPreview.data?.next_entity_code
+    if (next == null) return
+    setValues((prev) => ({ ...prev, [autoField.key]: next }))
+  }, [autoField, autoTouched, entityPreview.data])
 
   // Feature flags for the currently picked database (if any). Drives the
   // IP/OP/ED/APR-DRG locks. NO_DB_FEATURES until a database is selected.
@@ -79,6 +105,9 @@ export function CreateRowModal({
   }, [values, features, createFields])
 
   function setValue(key: string, v: unknown) {
+    // Any direct edit to the auto-preview field counts as an override, so
+    // we stop seeding it and send the agent's value on submit.
+    if (autoField && key === autoField.key) setAutoTouched(true)
     setValues((prev) => {
       const next = { ...prev, [key]: v }
       // When the database selection changes, reset every column whose
@@ -116,8 +145,18 @@ export function CreateRowModal({
     failures: { value: string; error: string }[]
   } | null>(null)
 
+  // Payload for a single create. Drops the auto-preview field when the
+  // agent didn't override it, so the backend assigns the authoritative
+  // value (largest + 1) at insert time rather than trusting a stale UI
+  // preview.
+  function buildCreatePayload(): Record<string, unknown> {
+    const out: Record<string, unknown> = { ...effectiveValues }
+    if (autoField && !autoTouched) delete out[autoField.key]
+    return out
+  }
+
   const m = useMutation({
-    mutationFn: () => createResource(config.slug, effectiveValues),
+    mutationFn: () => createResource(config.slug, buildCreatePayload()),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [config.slug] })
       qc.invalidateQueries({ queryKey: ['customer-picker'] })
@@ -242,6 +281,17 @@ export function CreateRowModal({
               disabled={override?.disabled ?? false}
               onChange={(v) => setValue(col.key, v)}
               allValues={effectiveValues}
+              helper={
+                col.autoPreview === 'customer-entity-code'
+                  ? entityPreview.isLoading
+                    ? 'Finding the largest existing entity code…'
+                    : entityPreview.data
+                      ? `Largest existing entity code: ${
+                          entityPreview.data.max_entity_code ?? '—'
+                        } — auto-set to +1 (editable).`
+                      : undefined
+                  : undefined
+              }
             />
           )
         })}
@@ -317,6 +367,7 @@ function FieldRow({
   disabled,
   onChange,
   allValues,
+  helper,
 }: {
   column: ColumnDef
   value: unknown
@@ -324,6 +375,8 @@ function FieldRow({
   disabled?: boolean
   onChange: (v: unknown) => void
   allValues?: Record<string, unknown>
+  /** Gray hint under the input (shown when there's no error). */
+  helper?: string
 }) {
   // An explicit createSpan wins; otherwise a multi-select takes the full
   // row (it shows chips), and long text fields span both columns.
@@ -352,7 +405,11 @@ function FieldRow({
         disabled={disabled}
         allValues={allValues}
       />
-      {error && <div className="text-[11px] text-error-600">{error}</div>}
+      {error ? (
+        <div className="text-[11px] text-error-600">{error}</div>
+      ) : helper ? (
+        <div className="text-[11px] text-gray-500">{helper}</div>
+      ) : null}
     </div>
   )
 }

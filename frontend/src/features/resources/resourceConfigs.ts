@@ -160,6 +160,15 @@ export interface ColumnDef {
    * State column): bold the abbreviation before the em dash. Display-only.
    */
   boldBeforeDash?: boolean
+  /**
+   * Marks a create-form field as an "auto value with preview". On modal
+   * open the named source is fetched, the field is pre-filled with the
+   * suggested value, and the current max is shown as helper text. If the
+   * agent leaves it untouched, the field is OMITTED from the create
+   * payload so the backend computes the authoritative value at insert
+   * time; an override is sent as-is. Only 'customer-entity-code' today.
+   */
+  autoPreview?: 'customer-entity-code'
 }
 
 export interface ResourceConfig {
@@ -343,6 +352,10 @@ export const customersConfig: ResourceConfig = {
       key: 'entity_code', label: 'Entity', kind: 'int', editable: true,
       min: 1, max: 32767,
       showInCreate: true,
+      // Auto-increment: pre-filled with (largest entity_code + 1) and the
+      // current max shown as a hint. Editable — if left untouched the
+      // backend computes the authoritative value at insert time.
+      autoPreview: 'customer-entity-code',
     },
     {
       key: 'state', label: 'State', kind: 'text', editable: true,

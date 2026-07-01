@@ -72,6 +72,18 @@ export function listResource<Row = Record<string, unknown>>(
   )
 }
 
+export interface NextEntityCode {
+  /** Largest existing entity_code (numeric), or null if no customers. */
+  max_entity_code: number | null
+  /** The value a new customer would get: max + 1. */
+  next_entity_code: number
+}
+
+/** Preview for the Create Customer form's auto-incrementing entity_code. */
+export function fetchNextEntityCode(): Promise<NextEntityCode> {
+  return api.get<NextEntityCode>('/api/customers/next-entity-code')
+}
+
 export interface CreateResponse<Row = Record<string, unknown>> {
   created: Row
 }
