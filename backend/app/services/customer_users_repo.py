@@ -246,7 +246,7 @@ def create_customer_user(conn: Connection, data: dict[str, Any]) -> None:
             "first_name": data.get("first_name"),
             "last_name": data.get("last_name"),
             "user_password": data.get("user_password"),
-            "pw_flag": data.get("pw_flag", 0),
+            "pw_flag": data.get("pw_flag", 1),
             "logging_flag": data.get("logging_flag", 0),
             "esri_access": data.get("esri_access", 0),
             "esri_tap_access": data.get("esri_tap_access", 0),
