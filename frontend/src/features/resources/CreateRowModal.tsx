@@ -288,7 +288,7 @@ export function CreateRowModal({
                     : entityPreview.data
                       ? `Largest existing entity code: ${
                           entityPreview.data.max_entity_code ?? '—'
-                        } — auto-set to +1 (editable).`
+                        } - auto-set to +1 (editable).`
                       : undefined
                   : undefined
               }
