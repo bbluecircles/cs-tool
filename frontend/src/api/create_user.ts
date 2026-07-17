@@ -53,7 +53,7 @@ export interface PpiDatasetInput {
 export interface UserInput {
   user_id: string
   user_password: string
-  pw_flag?: 0 | 1
+  pw_flag?: 1
   e_mail: string
   first_name: string
   last_name: string
