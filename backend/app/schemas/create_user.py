@@ -96,7 +96,7 @@ class UserInput(BaseModel):
         ),
     ]
     user_password: Annotated[str, StringConstraints(min_length=1, max_length=15)]
-    pw_flag: Literal[0, 1] = 0
+    pw_flag: Literal[0, 1] = 1
     e_mail: EmailStr
     first_name: Annotated[str, StringConstraints(min_length=1, max_length=35)]
     last_name: Annotated[str, StringConstraints(min_length=1, max_length=35)]
