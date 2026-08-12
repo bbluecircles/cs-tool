@@ -421,6 +421,19 @@ export function ResourceTable({
   const table = useReactTable({
     data: rows,
     columns,
+    // Identify rows by their composite primary key, not by array index
+    // (TanStack's default). The <tr> key below is row.id, so with index
+    // ids React reconciles rows positionally: when the list shifts under
+    // us — a create/refetch inserting a row, or a page/sort/filter swap
+    // through keepPreviousData — the component instances stay put and
+    // only their props change. Cell-local state then belongs to whoever
+    // used to occupy that position, which showed up as PasswordCell
+    // rendering the previous occupant's revealed password.
+    //
+    // Safe to key off rowKey: selection is tracked in `selectedKeys`
+    // (already config.rowKey-based), not TanStack's rowSelection state,
+    // and every config in ALL_CONFIGS defines rowKey.
+    getRowId: (row) => config.rowKey(row),
     state: { sorting, columnOrder },
     onSortingChange: (updater) => {
       const next = typeof updater === 'function' ? updater(sorting) : updater
