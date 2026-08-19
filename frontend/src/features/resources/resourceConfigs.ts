@@ -203,6 +203,13 @@ export interface ResourceConfig {
    */
   allowCancel?: boolean
   /**
+   * Whether each row shows a "Change code" action opening the modal that
+   * renumbers the customer's primary key. True for customers only — the
+   * backend endpoint it calls is customer-specific, since a code change
+   * has to cascade to every table carrying customer_code.
+   */
+  allowChangeCode?: boolean
+  /**
    * Drives the delete-confirm modal's impact section.
    *  - 'customer_dataset' : fetches /delete-impact and shows the active-
    *                         user count for the customer (the existing
@@ -333,6 +340,10 @@ export const customersConfig: ResourceConfig = {
   // Customers can't be deleted; instead each row gets a "Cancel" action
   // that stamps cancelled_date with today's date.
   allowCancel: true,
+  // ...and a "Change code" action. customer_code stays kind: 'readonly'
+  // below — it's the primary key, so it can't be inline-edited or patched
+  // like a normal column; the dedicated modal is the only way to change it.
+  allowChangeCode: true,
   columns: [
     {
       key: 'customer_code', label: 'Code', kind: 'readonly',

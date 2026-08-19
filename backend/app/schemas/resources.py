@@ -40,6 +40,34 @@ class EditPayload(BaseModel):
     changes: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChangeCodePayload(BaseModel):
+    """Body of POST /api/customers/{customer_code}/change-code.
+
+    Bounded at INT max as a sanity rail. The repo additionally verifies
+    the value round-trips, which catches a narrower column (e.g. SMALLINT)
+    silently clamping the code on a non-strict server.
+    """
+    new_code: int = Field(ge=1, le=2_147_483_647)
+
+
+class ChangeCodeImpact(BaseModel):
+    """What a code change would drag along with it. `counts` is keyed by
+    the labels in customer_repo.CODE_CHILD_TABLES."""
+    customer_code: int
+    customer_name: str | None = None
+    counts: dict[str, int]
+
+
+class ChangeCodeResponse(BaseModel):
+    customer_code: int
+    previous_code: int
+    # Rows updated per table: "customer" plus one entry per child table.
+    affected: dict[str, int]
+    # Rows renumbered across the denormalized user_details* tables.
+    user_details_rows: int
+    updated: dict[str, Any]
+
+
 class PasswordRevealResponse(BaseModel):
     user_id: str
     customer_code: int

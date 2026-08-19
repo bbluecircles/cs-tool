@@ -26,6 +26,7 @@ import {
 import { setHasUnsaved } from '@/lib/unsavedSignal'
 
 import { CancelConfirmModal } from './CancelConfirmModal'
+import { ChangeCodeModal } from './ChangeCodeModal'
 import { ConfirmSaveModal } from './ConfirmSaveModal'
 import { CreateRowModal } from './CreateRowModal'
 import { DeleteConfirmModal } from './DeleteConfirmModal'
@@ -64,6 +65,7 @@ export function ResourcePage({ config }: ResourcePageProps) {
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Row | null>(null)
   const [cancelTarget, setCancelTarget] = useState<Row | null>(null)
+  const [changeCodeTarget, setChangeCodeTarget] = useState<Row | null>(null)
   const [saveTarget, setSaveTarget] = useState<Row | null>(null)
   const dirty = useDirtyRows()
 
@@ -517,6 +519,9 @@ export function ResourcePage({ config }: ResourcePageProps) {
         onCancelRow={
           config.allowCancel ? (row) => setCancelTarget(row) : undefined
         }
+        onChangeCodeRow={
+          config.allowChangeCode ? (row) => setChangeCodeTarget(row) : undefined
+        }
         savingRowKey={savingRowKey}
         selectedKeys={selectedKeys}
         onToggleSelect={onToggleSelect}
@@ -573,6 +578,24 @@ export function ResourcePage({ config }: ResourcePageProps) {
           onClose={() => setCancelTarget(null)}
           onConfirm={confirmCancel}
           isPending={cancelM.isPending}
+        />
+      )}
+
+      {changeCodeTarget && config.allowChangeCode && (
+        <ChangeCodeModal
+          customerCode={Number(changeCodeTarget.customer_code)}
+          customerName={
+            typeof changeCodeTarget.customer_name === 'string'
+              ? changeCodeTarget.customer_name
+              : null
+          }
+          onClose={() => setChangeCodeTarget(null)}
+          onChanged={() => {
+            // The row's key changed, so any pending inline edits on it
+            // would PATCH the old code. Drop them.
+            dirty.clearRow(config.rowKey(changeCodeTarget))
+            setChangeCodeTarget(null)
+          }}
         />
       )}
 
