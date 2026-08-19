@@ -128,9 +128,9 @@ export function ChangeCustomerModal({
           onChange={(e) => setRevokeAccess(e.target.checked)}
         />
         <span>
-          Revoke their existing database access
+          Revoke their existing access
           <span className="block text-xs text-gray-500">
-            Drops the MariaDB account, clearing privileges for the old
+            Drops the account, clearing privileges for the old
             customer’s databases. Run grants recreates it with the same
             password. Uncheck to keep the old access.
           </span>
