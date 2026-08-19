@@ -124,7 +124,7 @@ export function ChangeCustomerModal({
           <li>
             Database privileges already granted for the{' '}
             <span className="font-medium">old</span> customer are{' '}
-            <span className="font-medium">not</span> revoked here — that
+            <span className="font-medium">not</span> revoked here. That
             needs a DBA, or disabling the user and running Remove grants.
           </li>
         </ul>
