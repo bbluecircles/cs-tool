@@ -18,6 +18,7 @@ its own endpoint. See customer_users_repo's "Reassigning a user" section.
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -25,7 +26,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_agent
 from app.api.errors import ER_DUP_ENTRY, conflict, invalid, mysql_errno
-from app.db.session import get_connection
+from app.db.session import get_connection, get_raw_connection
 from app.schemas.auth import CurrentAgent
 from app.schemas.resources import (
     ChangeCustomerPayload,
@@ -39,6 +40,8 @@ from app.schemas.resources import (
 )
 from app.services import audit, customer_users_repo, sync_sql
 from app.services.filter_parser import parse_filters_or_422
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/customer-users", tags=["customer_users"])
 
@@ -261,6 +264,13 @@ def change_user_customer(
     here, and the discharge/claim datasets belong to the customer rather
     than the user. What changes downstream is which datasets the user
     inherits, which the next refresh works out.
+
+    With revoke_access on (the default) the user's MariaDB account is
+    dropped afterwards, clearing privileges they held for the old
+    customer's databases. That runs POST-COMMIT on a raw connection: DROP
+    USER implicitly commits, so it can't share the move's transaction.
+    Either way the agent's follow-up is "Run grants" for the new customer,
+    which recreates the account and rebuilds the lookup rows.
     """
     new_code = payload.new_customer_code
     with get_connection() as conn:
@@ -306,14 +316,50 @@ def change_user_customer(
                 "customer_code": new_code,
                 "user_details_rows_removed": removed,
             },
-            notes=f"customer_code {customer_code} -> {new_code}",
+            notes=(
+                f"customer_code {customer_code} -> {new_code}"
+                f"{'; revoking account' if payload.revoke_access else ''}"
+            ),
             ip=_client_ip(request),
         )
+
+    # --- post-commit: drop the MariaDB account ------------------------------
+    # Outside the transaction above, because DROP USER implicitly commits.
+    # Best-effort by design: the move is already durable, so a failure here
+    # is reported rather than raised. Worst case the agent is where they'd
+    # have been without this step — user moved, old privileges intact.
+    revoke_ok = True
+    revoke_error: str | None = None
+    if payload.revoke_access:
+        try:
+            with get_raw_connection() as conn:
+                sync_sql.revoke_user_account(conn, user_id=user_id)
+        except Exception as e:
+            revoke_ok = False
+            revoke_error = str(e)
+            log.exception("change-customer: account revoke failed post-commit")
+        with get_connection() as conn:
+            audit.record(
+                conn,
+                user_id=agent.user_id,
+                action=(
+                    "customer_user.revoke_account"
+                    if revoke_ok
+                    else "customer_user.revoke_account.failed"
+                ),
+                entity_type="secure.customer_users",
+                entity_key=f"{user_id}|{new_code}",
+                notes=revoke_error or "dropped after customer change",
+                ip=_client_ip(request),
+            )
 
     return ChangeCustomerResponse(
         user_id=user_id,
         customer_code=new_code,
         previous_customer_code=customer_code,
         user_details_rows_removed=removed,
+        revoke_attempted=payload.revoke_access,
+        revoke_ok=revoke_ok,
+        revoke_error=revoke_error,
         updated=after or {"user_id": user_id, "customer_code": new_code},
     )

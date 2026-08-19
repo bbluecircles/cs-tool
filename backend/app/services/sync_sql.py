@@ -729,3 +729,48 @@ def purge_user_details(conn: Connection, *, user_id: str) -> int:
             log.warning("purge_user_details failed on %s: %s", tbl, e)
     log.info("purge_user_details(%s): %d rows", user_id, total)
     return total
+
+
+# ---------------------------------------------------------------------------
+# Single-user account revoke
+# ---------------------------------------------------------------------------
+# Same two statements revokes_for_customer generates, aimed at ONE user
+# instead of "every disabled user under customer X".
+#
+# revokes_for_customer can't serve this case: it selects on
+# `disable = 1 AND customer_code = :cc`, so reaching a specific active user
+# through it means flipping them to disabled, running it, and flipping them
+# back — three extra steps, a transient disabled state in the canonical
+# table, and it would drop OTHER disabled users of that customer as a side
+# effect. Targeting the user_id directly avoids all of that.
+#
+# There is no partial revoke: privileges are stripped by dropping the
+# account outright, which is why this is coarse. The account comes back on
+# the next "Run grants" for the user's customer, same password, with only
+# that customer's databases.
+#
+# MUST run on a raw (AUTOCOMMIT) connection — DROP USER implicitly commits
+# in MariaDB, so calling it inside a request transaction would commit that
+# transaction early.
+def revoke_user_account(conn: Connection, *, user_id: str) -> int:
+    """REVOKE ALL PRIVILEGES then DROP USER for one user. Returns the count
+    of statements that succeeded. A REVOKE against a user with no
+    privileges, or a DROP of an account that never existed, is harmless —
+    both are logged and skipped."""
+    # An account name can't be a bind parameter in DDL, so it's inlined.
+    # Escape by doubling any backtick, the MariaDB identifier-quoting rule,
+    # so a stored user_id can't terminate the quote and inject.
+    quoted = user_id.replace("`", "``")
+    stmts = (
+        f"REVOKE ALL PRIVILEGES, GRANT OPTION FROM `{quoted}`@`%`",
+        f"DROP USER IF EXISTS `{quoted}`@`%`",
+    )
+    ok = 0
+    for stmt in stmts:
+        try:
+            conn.execute(text(stmt))
+            ok += 1
+        except Exception as e:
+            log.warning("revoke_user_account failed (%s): %s", stmt[:60], e)
+    log.info("revoke_user_account(%s): %d/%d ok", user_id, ok, len(stmts))
+    return ok

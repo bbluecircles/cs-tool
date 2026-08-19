@@ -43,6 +43,13 @@ class EditPayload(BaseModel):
 class ChangeCustomerPayload(BaseModel):
     """Body of POST /api/customer-users/{user_id}/{customer_code}/change-customer."""
     new_customer_code: int = Field(ge=1)
+    # Drop the user's MariaDB account after the move, clearing privileges
+    # they held for the OLD customer's databases. Defaults on: the move
+    # already costs them access until grants are re-run (their lookup rows
+    # are purged either way), so revoking adds no extra downtime and is the
+    # safer end state. Turn it off for a move between related customers
+    # where the existing database access should carry over.
+    revoke_access: bool = True
 
 
 class ChangeCustomerResponse(BaseModel):
@@ -52,6 +59,12 @@ class ChangeCustomerResponse(BaseModel):
     # Lookup rows dropped from the denormalized user_details* tables. They
     # come back, pointing at the new customer, on the next refresh.
     user_details_rows_removed: int
+    # Post-commit account revoke. ok=True with attempted=False means it was
+    # not requested. A failure here does NOT fail the move — the user is
+    # reassigned either way; they just keep their old privileges.
+    revoke_attempted: bool = False
+    revoke_ok: bool = True
+    revoke_error: str | None = None
     updated: dict[str, Any]
 
 

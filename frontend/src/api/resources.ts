@@ -114,6 +114,11 @@ export interface ChangeCustomerResponse {
   customer_code: number
   previous_customer_code: number
   user_details_rows_removed: number
+  /** False when revoke_access wasn't requested. */
+  revoke_attempted: boolean
+  /** The revoke runs post-commit; a failure here doesn't undo the move. */
+  revoke_ok: boolean
+  revoke_error: string | null
   updated: Record<string, unknown>
 }
 
@@ -121,15 +126,19 @@ export interface ChangeCustomerResponse {
  * Reassign a user to a different customer. customer_code is half the
  * composite PK of secure.customer_users, so this is its own endpoint
  * rather than a PATCH — see backend app/api/customer_users.py.
+ *
+ * revokeAccess drops the user's MariaDB account after the move, clearing
+ * privileges held for the old customer's databases.
  */
 export function changeUserCustomer(
   userId: string,
   customerCode: number,
   newCustomerCode: number,
+  revokeAccess: boolean,
 ): Promise<ChangeCustomerResponse> {
   return api.post<ChangeCustomerResponse>(
     `/api/customer-users/${encodeURIComponent(userId)}/${customerCode}/change-customer`,
-    { new_customer_code: newCustomerCode },
+    { new_customer_code: newCustomerCode, revoke_access: revokeAccess },
   )
 }
 

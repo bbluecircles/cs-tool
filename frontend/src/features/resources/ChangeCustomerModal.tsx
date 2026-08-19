@@ -6,13 +6,15 @@
  * checks the target customer exists and guards the PK. See backend
  * app/api/customer_users.py.
  *
- * Two things the agent needs to know before confirming, both surfaced
- * below rather than handled automatically:
- *   - the user inherits the NEW customer's databases, and their lookup
- *     rows are dropped until grants are re-run for that customer;
- *   - MariaDB privileges for the OLD customer's databases are not revoked
- *     by this action (nothing in the tool revokes a single database from
- *     an active user).
+ * The "revoke existing access" checkbox drops the user's MariaDB account
+ * as part of the move, which is the only way this system clears
+ * privileges — there is no partial revoke. It defaults on because the
+ * move costs the user access either way (their lookup rows are purged
+ * regardless), so revoking adds no downtime and leaves a cleaner state.
+ * Uncheck it when moving between related customers that should keep
+ * sharing database access.
+ *
+ * Either way the follow-up is one step: Run grants for the new customer.
  */
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -42,6 +44,7 @@ export function ChangeCustomerModal({
   const qc = useQueryClient()
   const clientConfig = useConfig()
   const [target, setTarget] = useState<number | null>(null)
+  const [revokeAccess, setRevokeAccess] = useState(true)
 
   const adminCodes = (clientConfig.data?.admin_customer_codes ?? '')
     .split(',')
@@ -50,21 +53,31 @@ export function ChangeCustomerModal({
 
   const m = useMutation({
     mutationFn: (newCode: number) =>
-      changeUserCustomer(userId, currentCustomerCode, newCode),
-    onSuccess: () => {
+      changeUserCustomer(userId, currentCustomerCode, newCode, revokeAccess),
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['customer-users'] })
+      // The move committed even if the post-commit revoke failed. Hold the
+      // modal open in that case so the agent sees they need to clear the
+      // old privileges by hand; otherwise close as usual.
+      if (res.revoke_attempted && !res.revoke_ok) return
       onChanged()
     },
   })
 
+  // Set once the move has committed. The modal only stays open in that
+  // state when the follow-up revoke failed, so the form must lock: the
+  // user no longer exists under currentCustomerCode and re-submitting
+  // would 404.
+  const moved = m.isSuccess
   const sameAsCurrent = target !== null && target === currentCustomerCode
-  const canSubmit = target !== null && !sameAsCurrent && !m.isPending
+  const canSubmit =
+    target !== null && !sameAsCurrent && !m.isPending && !moved
   // Moving onto an admin code is legitimate (it's how a CS agent is
   // onboarded), so this warns rather than blocks.
   const targetIsAdmin = target !== null && adminCodes.includes(target)
 
   function submit() {
-    if (target === null || sameAsCurrent || m.isPending) return
+    if (!canSubmit || target === null) return
     m.mutate(target)
   }
 
@@ -95,7 +108,7 @@ export function ChangeCustomerModal({
         <CustomerSearchSelect
           value={target}
           onChange={setTarget}
-          disabled={m.isPending}
+          disabled={m.isPending || moved}
           invalid={sameAsCurrent}
           markCancelled
         />
@@ -105,6 +118,24 @@ export function ChangeCustomerModal({
           </div>
         )}
       </div>
+
+      <label className="mt-4 flex items-start gap-2 text-sm text-gray-700">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={revokeAccess}
+          disabled={m.isPending || moved}
+          onChange={(e) => setRevokeAccess(e.target.checked)}
+        />
+        <span>
+          Revoke their existing database access
+          <span className="block text-xs text-gray-500">
+            Drops the MariaDB account, clearing privileges for the old
+            customer’s databases. Run grants recreates it with the same
+            password. Uncheck to keep the old access.
+          </span>
+        </span>
+      </label>
 
       <div className="mt-4 rounded-md border border-warning-600/30 bg-warning-100 px-3 py-2 text-xs text-gray-700">
         <div className="text-sm font-medium text-gray-900">
@@ -117,16 +148,18 @@ export function ChangeCustomerModal({
             with the user.
           </li>
           <li>
-            Their lookup rows are removed until you{' '}
-            <span className="font-medium">Run grants</span> for the new
-            customer, which rebuilds them. Until then the user can’t get in.
+            They can’t get in until you run{' '}
+            <span className="font-medium">Admin → Run grants</span> for the
+            new customer, which rebuilds their lookup rows
+            {revokeAccess ? ' and their account' : ''}.
           </li>
-          <li>
-            Database privileges already granted for the{' '}
-            <span className="font-medium">old</span> customer are{' '}
-            <span className="font-medium">not</span> revoked here — that
-            needs a DBA, or disabling the user and running Remove grants.
-          </li>
+          {!revokeAccess && (
+            <li>
+              Privileges already granted for the{' '}
+              <span className="font-medium">old</span> customer’s databases
+              stay in place.
+            </li>
+          )}
         </ul>
       </div>
 
@@ -143,23 +176,44 @@ export function ChangeCustomerModal({
         </div>
       )}
 
+      {m.data?.revoke_attempted && !m.data.revoke_ok && (
+        <div className="mt-4 rounded-md border border-error-600/30 bg-error-100 px-3 py-2 text-sm text-error-600">
+          <span className="font-medium">
+            The user was moved, but the revoke failed.
+          </span>{' '}
+          They still hold their old database privileges — clear the account
+          by hand before running grants. {m.data.revoke_error}
+        </div>
+      )}
+
       <div className="mt-5 flex justify-end gap-2">
-        <button
-          type="button"
-          className="btn-ghost"
-          onClick={onClose}
-          disabled={m.isPending}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={submit}
-          disabled={!canSubmit}
-        >
-          {m.isPending ? 'Moving…' : 'Move user'}
-        </button>
+        {moved ? (
+          // The move already committed (only the revoke failed), so there's
+          // nothing left to confirm or cancel — just acknowledge and close
+          // through onChanged so the parent clears the stale row state.
+          <button type="button" className="btn-primary" onClick={onChanged}>
+            Close
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={onClose}
+              disabled={m.isPending}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={submit}
+              disabled={!canSubmit}
+            >
+              {m.isPending ? 'Moving…' : 'Move user'}
+            </button>
+          </>
+        )}
       </div>
     </ModalShell>
   )
