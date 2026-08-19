@@ -62,6 +62,8 @@ interface ResourceTableProps {
   onDeleteRow?: (row: Row) => void
   /** "Cancel" row action (Customers tab) — stamps cancelled_date today. */
   onCancelRow?: (row: Row) => void
+  /** "Change customer" row action (Users tab) — reassigns the user. */
+  onChangeCustomerRow?: (row: Row) => void
   savingRowKey: string | null
   /** Row keys (config.rowKey(row)) currently selected. Optional —
    *  callers that don't care about selection can omit it. */
@@ -96,6 +98,7 @@ export function ResourceTable({
   onDiscardRow,
   onDeleteRow,
   onCancelRow,
+  onChangeCustomerRow,
   savingRowKey,
   // Defaults so this table doesn't crash if a caller forgets to wire
   // selection. The selection toolbar and edit-modal trigger simply
@@ -224,6 +227,8 @@ export function ResourceTable({
   onDeleteRowRef.current = onDeleteRow
   const onCancelRowRef = useRef(onCancelRow)
   onCancelRowRef.current = onCancelRow
+  const onChangeCustomerRowRef = useRef(onChangeCustomerRow)
+  onChangeCustomerRowRef.current = onChangeCustomerRow
 
   const columns = useMemo<ColumnDef<Row>[]>(() => {
     const tableCols: ColumnDef<Row>[] = visibleConfigCols.map((col) => {
@@ -405,6 +410,17 @@ export function ResourceTable({
                 Cancel
               </button>
             )}
+            {config.allowChangeCustomer && onChangeCustomerRowRef.current && (
+              <button
+                type="button"
+                onClick={() => onChangeCustomerRowRef.current?.(rowObj)}
+                disabled={isSaving}
+                className="text-xs px-2 py-0.5 rounded text-gray-700 hover:bg-gray-100 disabled:opacity-50 whitespace-nowrap"
+                title="Move this user to a different customer"
+              >
+                Change customer
+              </button>
+            )}
           </div>
         )
       },
@@ -413,8 +429,9 @@ export function ResourceTable({
     return tableCols
     // Deliberately STABLE deps — `columns` must not be rebuilt on every
     // keystroke (see the refs above). Volatile state/handlers are read via
-    // refs inside the cells; the conditional Delete/Cancel buttons key off
-    // config (stable), so onDeleteRow/onCancelRow identity isn't needed here.
+    // refs inside the cells; the conditional Delete/Cancel/Change-customer
+    // buttons key off config (stable), so those handlers' identity isn't
+    // needed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleConfigCols, config, qc, dbFeaturesQuery.data, customerPickerQuery.data])
 

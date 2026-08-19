@@ -697,3 +697,35 @@ def propagate_disable(conn: Connection, *, user_id: str, disable: int) -> int:
             log.warning("propagate_disable failed on %s: %s", tbl, e)
     log.info("propagate_disable(%s -> %s): %d rows", user_id, disable, total)
     return total
+
+
+# ---------------------------------------------------------------------------
+# Lookup-row purge for one user (customer-reassignment safety net)
+# ---------------------------------------------------------------------------
+# When a user moves to a different customer, their existing user_details*
+# rows describe the OLD pairing: old customer_code, old customer_name, and
+# the OLD customer's databases (the refresh builds each row by joining the
+# customer to ITS datasets).
+#
+# Renumbering customer_code in place would be actively wrong — it would
+# produce rows claiming the new customer while still granting the old
+# customer's databases. So we DELETE instead. The user drops out of the
+# lookup tables until a refresh rebuilds them under the new customer, which
+# is what "Run grants" does (it force-refreshes first). Access stops rather
+# than becoming subtly wrong; that's the safe direction to fail.
+def purge_user_details(conn: Connection, *, user_id: str) -> int:
+    """Remove one user's rows from every user_details* table. Returns total
+    rows deleted. Scoped by user_id alone — it's globally unique across
+    customers. Per-table failures are logged but don't abort the rest."""
+    total = 0
+    for tbl in _USER_DETAILS_TABLES:
+        try:
+            r = conn.execute(
+                text(f"DELETE FROM {tbl} WHERE user_id = :uid"),
+                {"uid": user_id},
+            )
+            total += r.rowcount or 0
+        except Exception as e:
+            log.warning("purge_user_details failed on %s: %s", tbl, e)
+    log.info("purge_user_details(%s): %d rows", user_id, total)
+    return total

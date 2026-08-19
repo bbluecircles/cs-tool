@@ -40,6 +40,21 @@ class EditPayload(BaseModel):
     changes: dict[str, Any] = Field(default_factory=dict)
 
 
+class ChangeCustomerPayload(BaseModel):
+    """Body of POST /api/customer-users/{user_id}/{customer_code}/change-customer."""
+    new_customer_code: int = Field(ge=1)
+
+
+class ChangeCustomerResponse(BaseModel):
+    user_id: str
+    customer_code: int
+    previous_customer_code: int
+    # Lookup rows dropped from the denormalized user_details* tables. They
+    # come back, pointing at the new customer, on the next refresh.
+    user_details_rows_removed: int
+    updated: dict[str, Any]
+
+
 class PasswordRevealResponse(BaseModel):
     user_id: str
     customer_code: int

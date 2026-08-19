@@ -203,6 +203,14 @@ export interface ResourceConfig {
    */
   allowCancel?: boolean
   /**
+   * Whether each row shows a "Change customer" action, reassigning the
+   * row to a different customer_code. True for customer-users only —
+   * customer_code is half that table's composite primary key, so it can't
+   * be inline-edited or PATCHed like a normal column and needs the
+   * dedicated endpoint the modal calls.
+   */
+  allowChangeCustomer?: boolean
+  /**
    * Drives the delete-confirm modal's impact section.
    *  - 'customer_dataset' : fetches /delete-impact and shows the active-
    *                         user count for the customer (the existing
@@ -423,6 +431,10 @@ export const customerUsersConfig: ResourceConfig = {
     'first_name', 'last_name', 'e_mail', 'user_password',
   ],
   allowDelete: false,
+  // Users can be moved between customers via a row action. The
+  // customer_code column below stays editable: false — the move is a
+  // primary-key change, not a cell edit.
+  allowChangeCustomer: true,
   columns: [
     {
       key: 'user_id', label: 'User ID', kind: 'text', editable: false,

@@ -26,6 +26,7 @@ import {
 import { setHasUnsaved } from '@/lib/unsavedSignal'
 
 import { CancelConfirmModal } from './CancelConfirmModal'
+import { ChangeCustomerModal } from './ChangeCustomerModal'
 import { ConfirmSaveModal } from './ConfirmSaveModal'
 import { CreateRowModal } from './CreateRowModal'
 import { DeleteConfirmModal } from './DeleteConfirmModal'
@@ -64,6 +65,9 @@ export function ResourcePage({ config }: ResourcePageProps) {
   const [creating, setCreating] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Row | null>(null)
   const [cancelTarget, setCancelTarget] = useState<Row | null>(null)
+  const [changeCustomerTarget, setChangeCustomerTarget] = useState<Row | null>(
+    null,
+  )
   const [saveTarget, setSaveTarget] = useState<Row | null>(null)
   const dirty = useDirtyRows()
 
@@ -517,6 +521,11 @@ export function ResourcePage({ config }: ResourcePageProps) {
         onCancelRow={
           config.allowCancel ? (row) => setCancelTarget(row) : undefined
         }
+        onChangeCustomerRow={
+          config.allowChangeCustomer
+            ? (row) => setChangeCustomerTarget(row)
+            : undefined
+        }
         savingRowKey={savingRowKey}
         selectedKeys={selectedKeys}
         onToggleSelect={onToggleSelect}
@@ -573,6 +582,26 @@ export function ResourcePage({ config }: ResourcePageProps) {
           onClose={() => setCancelTarget(null)}
           onConfirm={confirmCancel}
           isPending={cancelM.isPending}
+        />
+      )}
+
+      {changeCustomerTarget && config.allowChangeCustomer && (
+        <ChangeCustomerModal
+          userId={String(changeCustomerTarget.user_id)}
+          currentCustomerCode={Number(changeCustomerTarget.customer_code)}
+          currentCustomerName={
+            typeof changeCustomerTarget.customer_name === 'string'
+              ? changeCustomerTarget.customer_name
+              : null
+          }
+          onClose={() => setChangeCustomerTarget(null)}
+          onChanged={() => {
+            // rowKey/buildId embed the old customer_code, so any pending
+            // inline edits on this row would PATCH a URL that no longer
+            // resolves. Drop them.
+            dirty.clearRow(config.rowKey(changeCustomerTarget))
+            setChangeCustomerTarget(null)
+          }}
         />
       )}
 

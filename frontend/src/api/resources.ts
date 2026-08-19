@@ -109,6 +109,30 @@ export function updateResource<Row = Record<string, unknown>>(
   )
 }
 
+export interface ChangeCustomerResponse {
+  user_id: string
+  customer_code: number
+  previous_customer_code: number
+  user_details_rows_removed: number
+  updated: Record<string, unknown>
+}
+
+/**
+ * Reassign a user to a different customer. customer_code is half the
+ * composite PK of secure.customer_users, so this is its own endpoint
+ * rather than a PATCH — see backend app/api/customer_users.py.
+ */
+export function changeUserCustomer(
+  userId: string,
+  customerCode: number,
+  newCustomerCode: number,
+): Promise<ChangeCustomerResponse> {
+  return api.post<ChangeCustomerResponse>(
+    `/api/customer-users/${encodeURIComponent(userId)}/${customerCode}/change-customer`,
+    { new_customer_code: newCustomerCode },
+  )
+}
+
 export interface DeleteResponse {
   deleted: boolean
   rec_id: number

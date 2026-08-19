@@ -6,8 +6,14 @@
   GET    /api/customer-users/{user_id}/{customer_code}    fetch one
   GET    /api/customer-users/{user_id}/{customer_code}/password  reveal (audited)
   PATCH  /api/customer-users/{user_id}/{customer_code}    update
+  POST   /api/customer-users/{user_id}/{customer_code}/change-customer
+                                                          reassign to another customer
 
 No DELETE — users are deactivated via `disable`, not removed.
+
+customer_code is half the composite primary key, so reassigning a user to
+a different customer can't go through PATCH like a normal column — it has
+its own endpoint. See customer_users_repo's "Reassigning a user" section.
 """
 
 from __future__ import annotations
@@ -22,6 +28,8 @@ from app.api.errors import ER_DUP_ENTRY, conflict, invalid, mysql_errno
 from app.db.session import get_connection
 from app.schemas.auth import CurrentAgent
 from app.schemas.resources import (
+    ChangeCustomerPayload,
+    ChangeCustomerResponse,
     CreateResponse,
     EditPayload,
     ListResponse,
@@ -234,3 +242,78 @@ def update_customer_user(
             ip=_client_ip(request),
         )
     return UpdateResponse(updated=after or {"user_id": user_id})
+
+
+@router.post(
+    "/{user_id}/{customer_code}/change-customer",
+    response_model=ChangeCustomerResponse,
+)
+def change_user_customer(
+    user_id: str,
+    customer_code: int,
+    payload: ChangeCustomerPayload,
+    request: Request,
+    agent: Annotated[CurrentAgent, Depends(get_current_agent)],
+) -> ChangeCustomerResponse:
+    """Reassign a user to a different customer.
+
+    One UPDATE — user_id is globally unique, so the user has a single row
+    here, and the discharge/claim datasets belong to the customer rather
+    than the user. What changes downstream is which datasets the user
+    inherits, which the next refresh works out.
+    """
+    new_code = payload.new_customer_code
+    with get_connection() as conn:
+        before = customer_users_repo.get_customer_user(
+            conn, user_id, customer_code
+        )
+        if before is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+            )
+        try:
+            customer_users_repo.move_customer_user(
+                conn, user_id, customer_code, new_code
+            )
+        except customer_users_repo.UserAlreadyAssigned as e:
+            raise conflict(str(e), field="customer_code")
+        except ValueError as e:
+            raise invalid(str(e), field="customer_code")
+        except IntegrityError as e:
+            if mysql_errno(e) == ER_DUP_ENTRY:
+                raise conflict(
+                    f"User '{user_id}' already has a row under customer "
+                    f"{new_code}.",
+                    field="customer_code",
+                )
+            raise
+
+        # Drop the user's denormalized rows rather than renumbering them:
+        # they carry the OLD customer's databases, and a row labeled with
+        # the new customer but granting the old one's data would be worse
+        # than no row at all. Run grants for the new customer rebuilds them.
+        removed = sync_sql.purge_user_details(conn, user_id=user_id)
+
+        after = customer_users_repo.get_customer_user(conn, user_id, new_code)
+        audit.record(
+            conn,
+            user_id=agent.user_id,
+            action="customer_user.change_customer",
+            entity_type="secure.customer_users",
+            entity_key=f"{user_id}|{customer_code}",
+            before={"customer_code": customer_code},
+            after={
+                "customer_code": new_code,
+                "user_details_rows_removed": removed,
+            },
+            notes=f"customer_code {customer_code} -> {new_code}",
+            ip=_client_ip(request),
+        )
+
+    return ChangeCustomerResponse(
+        user_id=user_id,
+        customer_code=new_code,
+        previous_customer_code=customer_code,
+        user_details_rows_removed=removed,
+        updated=after or {"user_id": user_id, "customer_code": new_code},
+    )

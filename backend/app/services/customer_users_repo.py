@@ -306,3 +306,65 @@ def update_customer_user(
         ),
         params,
     )
+
+
+# ---------------------------------------------------------------------------
+# Reassigning a user to a different customer
+# ---------------------------------------------------------------------------
+# customer_code is half the composite PK, so this can't ride the generic
+# update_customer_user path (customer_code is not in EDITABLE_COLUMNS and
+# stays out on purpose). It gets its own function and its own endpoint.
+#
+# It stays a single UPDATE, though: user_id is globally unique across all
+# customers (see user_id_available), so a user has exactly ONE row here.
+# Nothing else keys off (user_id, customer_code) — the discharge and claim
+# datasets hang off the CUSTOMER, not the user, so they stay put. The user
+# simply inherits whatever datasets the new customer has.
+
+
+class UserAlreadyAssigned(ValueError):
+    """A row for this user already exists under the target customer.
+
+    Can't happen while user_id stays globally unique, but the PK is
+    composite so the collision is representable. A subclass of ValueError
+    so broad handlers still catch it, while the router can answer 409.
+    """
+
+
+def _customer_exists(conn: Connection, customer_code: int) -> bool:
+    """Same check create_user._customer_exists does — referential integrity
+    for customer_code is enforced in application code, not by the schema."""
+    return conn.execute(
+        text("SELECT 1 FROM secure.customer WHERE customer_code = :cc LIMIT 1"),
+        {"cc": customer_code},
+    ).first() is not None
+
+
+def move_customer_user(
+    conn: Connection, user_id: str, old_code: int, new_code: int
+) -> None:
+    """Reassign one user to a different customer.
+
+    Raises UserAlreadyAssigned if the target row already exists, or
+    ValueError for any other bad request. Runs in the caller's transaction.
+    """
+    if new_code == old_code:
+        raise ValueError("That user is already assigned to this customer.")
+    if not _customer_exists(conn, new_code):
+        raise ValueError(f"Customer {new_code} does not exist.")
+    # Friendly pre-check; the composite PK is the real guarantee, so a row
+    # created in the meantime surfaces as a duplicate-key IntegrityError
+    # that the router maps to the same 409.
+    if get_customer_user(conn, user_id, new_code) is not None:
+        raise UserAlreadyAssigned(
+            f"User '{user_id}' already has a row under customer {new_code}."
+        )
+
+    conn.execute(
+        text(
+            "UPDATE secure.customer_users "
+            "SET customer_code = :new, modify_date = NOW() "
+            "WHERE user_id = :uid AND customer_code = :old"
+        ),
+        {"new": new_code, "old": old_code, "uid": user_id},
+    )
