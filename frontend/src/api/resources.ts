@@ -84,49 +84,6 @@ export function fetchNextEntityCode(): Promise<NextEntityCode> {
   return api.get<NextEntityCode>('/api/customers/next-entity-code')
 }
 
-/**
- * Rows a customer-code change would renumber. `counts` is keyed by child
- * table label (customer_users / customer_datasets / ppi_datasets) — the
- * modal renders whatever keys come back rather than hardcoding the list.
- */
-export interface ChangeCodeImpact {
-  customer_code: number
-  customer_name: string | null
-  counts: Record<string, number>
-}
-
-export function fetchChangeCodeImpact(
-  customerCode: number,
-): Promise<ChangeCodeImpact> {
-  return api.get<ChangeCodeImpact>(
-    `/api/customers/${customerCode}/change-code-impact`,
-  )
-}
-
-export interface ChangeCodeResponse {
-  customer_code: number
-  previous_code: number
-  /** Rows updated per table: "customer" plus one entry per child table. */
-  affected: Record<string, number>
-  user_details_rows: number
-  updated: Record<string, unknown>
-}
-
-/**
- * Renumber a customer. The backend rejects a code that's already taken
- * (409) and cascades the change to customer_users / customer_dataset /
- * ppi_dataset in one transaction — see backend app/api/customers.py.
- */
-export function changeCustomerCode(
-  customerCode: number,
-  newCode: number,
-): Promise<ChangeCodeResponse> {
-  return api.post<ChangeCodeResponse>(
-    `/api/customers/${customerCode}/change-code`,
-    { new_code: newCode },
-  )
-}
-
 export interface CreateResponse<Row = Record<string, unknown>> {
   created: Row
 }

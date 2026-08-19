@@ -5,15 +5,8 @@
   GET    /api/customers/{customer_code}   fetch one
   PATCH  /api/customers/{customer_code}   partial update
   POST   /api/customers/{customer_code}/preview   diff preview (if confirmation on)
-  GET    /api/customers/{customer_code}/change-code-impact  rows a renumber moves
-  POST   /api/customers/{customer_code}/change-code         renumber the customer
 
 No DELETE — customers are not deletable.
-
-customer_code is the primary key AND a business key other tables carry, so
-changing it can't go through PATCH: it needs its own endpoint that guards
-uniqueness and cascades to the child tables. See customer_repo's
-"Changing a customer's code" section.
 
 Filters arrive as repeated `filter=column:operator:value` query params.
 See app.services.filter_parser for the full grammar. The router
@@ -26,17 +19,12 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import get_current_agent
-from app.api.errors import ER_DUP_ENTRY, conflict, invalid, mysql_errno
 from app.core.config import get_settings
 from app.db.session import get_connection
 from app.schemas.auth import CurrentAgent
 from app.schemas.resources import (
-    ChangeCodeImpact,
-    ChangeCodePayload,
-    ChangeCodeResponse,
     ChangePreviewImpact,
     CreateResponse,
     EditPayload,
@@ -44,7 +32,7 @@ from app.schemas.resources import (
     PreviewResponse,
     UpdateResponse,
 )
-from app.services import audit, customer_repo, sync_sql
+from app.services import audit, customer_repo
 from app.services.filter_parser import parse_filters_or_422
 
 router = APIRouter(prefix="/api/customers", tags=["customers"])
@@ -194,112 +182,3 @@ def update_customer(
             ip=_client_ip(request),
         )
     return UpdateResponse(updated=after or {"customer_code": customer_code})
-
-
-@router.get(
-    "/{customer_code}/change-code-impact", response_model=ChangeCodeImpact
-)
-def change_code_impact(
-    customer_code: int,
-    _: Annotated[CurrentAgent, Depends(get_current_agent)],
-) -> ChangeCodeImpact:
-    """How many child rows a code change would renumber. Read-only —
-    feeds the confirm modal so the agent sees the blast radius first."""
-    with get_connection() as conn:
-        row = customer_repo.get_customer(conn, customer_code)
-        if row is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found"
-            )
-        counts = customer_repo.child_row_counts(conn, customer_code)
-    return ChangeCodeImpact(
-        customer_code=customer_code,
-        customer_name=row.get("customer_name"),
-        counts=counts,
-    )
-
-
-@router.post("/{customer_code}/change-code", response_model=ChangeCodeResponse)
-def change_customer_code(
-    customer_code: int,
-    payload: ChangeCodePayload,
-    request: Request,
-    agent: Annotated[CurrentAgent, Depends(get_current_agent)],
-) -> ChangeCodeResponse:
-    """Renumber a customer, cascading to every table that references it.
-
-    Guards, in order: the admin codes are off-limits, the target code must
-    be free, and the whole cascade is one transaction.
-    """
-    new_code = payload.new_code
-    admin_codes = get_settings().admin_customer_code_set
-    # Admin access to this tool IS a customer_code (mariadb_auth checks it
-    # against admin_customer_code_set). Renumbering the admin customer would
-    # lock every agent out; renumbering onto that code would hand admin to
-    # a whole customer's users. Neither is recoverable from the UI.
-    if customer_code in admin_codes or new_code in admin_codes:
-        raise invalid(
-            "Admin customer codes ("
-            + ", ".join(str(c) for c in sorted(admin_codes))
-            + ") can't be used here — tool access is granted by "
-            "customer_code, so renumbering one would change who is an admin.",
-            field="new_code",
-            code="admin_code",
-        )
-
-    with get_connection() as conn:
-        # A missing customer is a 404, not the 422 the repo's own
-        # existence check would produce.
-        if not customer_repo.customer_code_exists(conn, customer_code):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found"
-            )
-        try:
-            affected = customer_repo.change_customer_code(
-                conn, customer_code, new_code
-            )
-        except customer_repo.CustomerCodeInUse as e:
-            raise conflict(str(e), field="new_code")
-        except ValueError as e:
-            raise invalid(str(e), field="new_code")
-        except IntegrityError as e:
-            # The code was claimed between the pre-check and the UPDATE.
-            if mysql_errno(e) == ER_DUP_ENTRY:
-                raise conflict(
-                    f"Customer code {new_code} is already in use by "
-                    f"another customer.",
-                    field="new_code",
-                )
-            raise
-
-        # Keep the denormalized user_details* tables in step. Without this
-        # they hold the old code until the (externally owned) refresh runs,
-        # which would misreport admin status and mis-scope grants.
-        user_details_rows = sync_sql.propagate_customer_code(
-            conn, old_code=customer_code, new_code=new_code
-        )
-
-        after = customer_repo.get_customer(conn, new_code)
-        audit.record(
-            conn,
-            user_id=agent.user_id,
-            action="customer.change_code",
-            entity_type="secure.customer",
-            entity_key=str(customer_code),
-            before={"customer_code": customer_code},
-            after={
-                "customer_code": new_code,
-                "affected": affected,
-                "user_details_rows": user_details_rows,
-            },
-            notes=f"customer_code {customer_code} -> {new_code}",
-            ip=_client_ip(request),
-        )
-
-    return ChangeCodeResponse(
-        customer_code=new_code,
-        previous_code=customer_code,
-        affected=affected,
-        user_details_rows=user_details_rows,
-        updated=after or {"customer_code": new_code},
-    )
