@@ -6,15 +6,16 @@
  * checks the target customer exists and guards the PK. See backend
  * app/api/customer_users.py.
  *
- * The "revoke existing access" checkbox drops the user's MariaDB account
- * as part of the move, which is the only way this system clears
- * privileges — there is no partial revoke. It defaults on because the
- * move costs the user access either way (their lookup rows are purged
- * regardless), so revoking adds no downtime and leaves a cleaner state.
- * Uncheck it when moving between related customers that should keep
- * sharing database access.
+ * The move always drops the user's MariaDB account — the only way this
+ * system clears privileges, since there is no partial revoke. This was
+ * briefly an opt-out checkbox; it isn't any more. Keeping the account
+ * would leave the user holding live SELECT on the previous customer's
+ * databases (reachable from ODBC, BIRT, any SQL client) while the tool's
+ * UI showed no such access, because the lookup rows are purged either
+ * way. Concealed access is the one outcome worse than granting or
+ * removing it outright.
  *
- * Either way the follow-up is one step: Run grants for the new customer.
+ * The follow-up is one step: Run grants for the new customer.
  */
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -44,22 +45,54 @@ export function ChangeCustomerModal({
   const qc = useQueryClient()
   const clientConfig = useConfig()
   const [target, setTarget] = useState<number | null>(null)
-  const [revokeAccess, setRevokeAccess] = useState(true)
+  // Admin code awaiting confirmation — non-null while the nested confirm
+  // is up. Separate from `acknowledgedAdmin` so declining can distinguish
+  // "asked and refused" from "never asked".
+  const [pendingAdmin, setPendingAdmin] = useState<number | null>(null)
+  const [acknowledgedAdmin, setAcknowledgedAdmin] = useState<number | null>(
+    null,
+  )
 
   const adminCodes = (clientConfig.data?.admin_customer_codes ?? '')
     .split(',')
     .map((c) => Number(c.trim()))
     .filter((c) => Number.isFinite(c))
 
+  /**
+   * Picking an admin customer makes this user a CS-tool admin, so it asks
+   * before accepting the selection rather than noting it further down the
+   * form where it's easy to skim past. Re-prompts when the agent switches
+   * to a DIFFERENT admin code; staying on one they already confirmed
+   * doesn't nag.
+   */
+  function handleTargetChange(v: number | null) {
+    setTarget(v)
+    if (v !== null && adminCodes.includes(v) && v !== acknowledgedAdmin) {
+      setPendingAdmin(v)
+    }
+  }
+
+  function confirmAdmin() {
+    setAcknowledgedAdmin(pendingAdmin)
+    setPendingAdmin(null)
+  }
+
+  /** Declining clears the picker so no admin code is left staged. */
+  function declineAdmin() {
+    setTarget(null)
+    setAcknowledgedAdmin(null)
+    setPendingAdmin(null)
+  }
+
   const m = useMutation({
     mutationFn: (newCode: number) =>
-      changeUserCustomer(userId, currentCustomerCode, newCode, revokeAccess),
+      changeUserCustomer(userId, currentCustomerCode, newCode),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['customer-users'] })
       // The move committed even if the post-commit revoke failed. Hold the
       // modal open in that case so the agent sees they need to clear the
       // old privileges by hand; otherwise close as usual.
-      if (res.revoke_attempted && !res.revoke_ok) return
+      if (!res.revoke_ok) return
       onChanged()
     },
   })
@@ -71,9 +104,13 @@ export function ChangeCustomerModal({
   const moved = m.isSuccess
   const sameAsCurrent = target !== null && target === currentCustomerCode
   const canSubmit =
-    target !== null && !sameAsCurrent && !m.isPending && !moved
-  // Moving onto an admin code is legitimate (it's how a CS agent is
-  // onboarded), so this warns rather than blocks.
+    target !== null &&
+    !sameAsCurrent &&
+    !m.isPending &&
+    !moved &&
+    pendingAdmin === null
+  // Moving onto an admin code is legitimate — it's how a CS agent gets
+  // onboarded — so it's confirmed, not blocked.
   const targetIsAdmin = target !== null && adminCodes.includes(target)
 
   function submit() {
@@ -91,7 +128,11 @@ export function ChangeCustomerModal({
   return (
     <ModalShell
       onClose={m.isPending ? () => {} : onClose}
-      locked={m.isPending}
+      // Locked while the admin confirm is up so a single Escape or
+      // backdrop click resolves that dialog only. Both shells register a
+      // window keydown listener, so without this Escape would decline the
+      // confirm AND close this modal in one press.
+      locked={m.isPending || pendingAdmin !== null}
       width="max-w-md"
     >
       <h2 className="text-base font-semibold text-gray-900">Change customer</h2>
@@ -107,7 +148,7 @@ export function ChangeCustomerModal({
         <label className="label">New customer</label>
         <CustomerSearchSelect
           value={target}
-          onChange={setTarget}
+          onChange={handleTargetChange}
           disabled={m.isPending || moved}
           invalid={sameAsCurrent}
           markCancelled
@@ -117,31 +158,23 @@ export function ChangeCustomerModal({
             That’s the customer they’re already assigned to.
           </div>
         )}
+        {targetIsAdmin && acknowledgedAdmin === target && (
+          <div className="text-[11px] text-warning-600">
+            Admin customer — confirmed. This user becomes a CS-tool admin.
+          </div>
+        )}
       </div>
-
-      <label className="mt-4 flex items-start gap-2 text-sm text-gray-700">
-        <input
-          type="checkbox"
-          className="mt-0.5"
-          checked={revokeAccess}
-          disabled={m.isPending || moved}
-          onChange={(e) => setRevokeAccess(e.target.checked)}
-        />
-        <span>
-          Revoke their existing database access
-          <span className="block text-xs text-gray-500">
-            Drops the MariaDB account, clearing privileges for the old
-            customer’s databases. Run grants recreates it with the same
-            password. Uncheck to keep the old access.
-          </span>
-        </span>
-      </label>
 
       <div className="mt-4 rounded-md border border-warning-600/30 bg-warning-100 px-3 py-2 text-xs text-gray-700">
         <div className="text-sm font-medium text-gray-900">
           What this changes
         </div>
         <ul className="mt-1 space-y-1">
+          <li>
+            Their existing database access is revoked — the MariaDB account
+            is dropped, so no privileges carry over from{' '}
+            {currentCustomerName ?? 'the old customer'}.
+          </li>
           <li>
             The user picks up the new customer’s discharge and claim
             databases. Those rows belong to the customer, so nothing moves
@@ -150,25 +183,11 @@ export function ChangeCustomerModal({
           <li>
             They can’t get in until you run{' '}
             <span className="font-medium">Admin → Run grants</span> for the
-            new customer, which rebuilds their lookup rows
-            {revokeAccess ? ' and their account' : ''}.
+            new customer, which recreates the account with the same
+            password and rebuilds their lookup rows.
           </li>
-          {!revokeAccess && (
-            <li>
-              Privileges already granted for the{' '}
-              <span className="font-medium">old</span> customer’s databases
-              stay in place.
-            </li>
-          )}
         </ul>
       </div>
-
-      {targetIsAdmin && (
-        <div className="mt-3 rounded-md border border-warning-600/30 bg-warning-100 px-3 py-2 text-xs text-gray-800">
-          Heads up: code {target} is an admin customer code, so this user
-          becomes a CS-tool admin once grants are re-run.
-        </div>
-      )}
 
       {submitError && (
         <div className="mt-4 rounded-md border border-error-600/30 bg-error-100 px-3 py-2 text-sm text-error-600">
@@ -176,7 +195,7 @@ export function ChangeCustomerModal({
         </div>
       )}
 
-      {m.data?.revoke_attempted && !m.data.revoke_ok && (
+      {m.data && !m.data.revoke_ok && (
         <div className="mt-4 rounded-md border border-error-600/30 bg-error-100 px-3 py-2 text-sm text-error-600">
           <span className="font-medium">
             The user was moved, but the revoke failed.
@@ -214,6 +233,60 @@ export function ChangeCustomerModal({
             </button>
           </>
         )}
+      </div>
+
+      {pendingAdmin !== null && (
+        <AdminCustomerConfirm
+          userId={userId}
+          code={pendingAdmin}
+          onConfirm={confirmAdmin}
+          onDecline={declineAdmin}
+        />
+      )}
+    </ModalShell>
+  )
+}
+
+/**
+ * Nested confirm for picking an admin customer. Kept in this file rather
+ * than factored out — it's meaningless outside this flow, and it reads
+ * from the same admin-code semantics the parent already owns.
+ *
+ * Rendered INSIDE the parent ModalShell so it sits above it in DOM order
+ * (both shells use the same z-index). The parent is passed locked while
+ * this is open, so Escape and backdrop clicks land here only.
+ */
+function AdminCustomerConfirm({
+  userId,
+  code,
+  onConfirm,
+  onDecline,
+}: {
+  userId: string
+  code: number
+  onConfirm: () => void
+  onDecline: () => void
+}) {
+  return (
+    <ModalShell onClose={onDecline} width="max-w-sm">
+      <h2 className="text-base font-semibold text-gray-900">
+        Grant admin access?
+      </h2>
+      <p className="mt-2 text-sm text-gray-600">
+        Code <span className="font-mono text-gray-900">{code}</span> is an
+        admin customer. Moving{' '}
+        <span className="font-mono text-gray-900">{userId}</span> there makes
+        them a <span className="font-medium">CS-tool admin</span> — full
+        access to this tool, including grants and the audit log — once
+        grants are re-run.
+      </p>
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" className="btn-ghost" onClick={onDecline}>
+          No, pick another
+        </button>
+        <button type="button" className="btn-primary" onClick={onConfirm}>
+          Yes, make them an admin
+        </button>
       </div>
     </ModalShell>
   )

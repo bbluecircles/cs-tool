@@ -265,12 +265,18 @@ def change_user_customer(
     than the user. What changes downstream is which datasets the user
     inherits, which the next refresh works out.
 
-    With revoke_access on (the default) the user's MariaDB account is
-    dropped afterwards, clearing privileges they held for the old
-    customer's databases. That runs POST-COMMIT on a raw connection: DROP
-    USER implicitly commits, so it can't share the move's transaction.
-    Either way the agent's follow-up is "Run grants" for the new customer,
-    which recreates the account and rebuilds the lookup rows.
+    The user's MariaDB account is ALWAYS dropped afterwards, clearing the
+    privileges they held for the old customer's databases. This is not
+    optional: leaving the account intact would let them keep reading the
+    previous customer's data through any direct client (ODBC, BIRT, a SQL
+    console) even though the tool's UI — driven by the purged lookup rows
+    — would show no such access. Hiding a live privilege is worse than
+    either granting or removing it outright.
+
+    The drop runs POST-COMMIT on a raw connection: DROP USER implicitly
+    commits, so it can't share the move's transaction. The agent's
+    follow-up is "Run grants" for the new customer, which recreates the
+    account with the same password and rebuilds the lookup rows.
     """
     new_code = payload.new_customer_code
     with get_connection() as conn:
@@ -316,10 +322,7 @@ def change_user_customer(
                 "customer_code": new_code,
                 "user_details_rows_removed": removed,
             },
-            notes=(
-                f"customer_code {customer_code} -> {new_code}"
-                f"{'; revoking account' if payload.revoke_access else ''}"
-            ),
+            notes=f"customer_code {customer_code} -> {new_code}; revoking account",
             ip=_client_ip(request),
         )
 
@@ -327,38 +330,37 @@ def change_user_customer(
     # Outside the transaction above, because DROP USER implicitly commits.
     # Best-effort by design: the move is already durable, so a failure here
     # is reported rather than raised. Worst case the agent is where they'd
-    # have been without this step — user moved, old privileges intact.
+    # have been without this step — user moved, old privileges intact — and
+    # the response says so loudly enough for them to clear it by hand.
     revoke_ok = True
     revoke_error: str | None = None
-    if payload.revoke_access:
-        try:
-            with get_raw_connection() as conn:
-                sync_sql.revoke_user_account(conn, user_id=user_id)
-        except Exception as e:
-            revoke_ok = False
-            revoke_error = str(e)
-            log.exception("change-customer: account revoke failed post-commit")
-        with get_connection() as conn:
-            audit.record(
-                conn,
-                user_id=agent.user_id,
-                action=(
-                    "customer_user.revoke_account"
-                    if revoke_ok
-                    else "customer_user.revoke_account.failed"
-                ),
-                entity_type="secure.customer_users",
-                entity_key=f"{user_id}|{new_code}",
-                notes=revoke_error or "dropped after customer change",
-                ip=_client_ip(request),
-            )
+    try:
+        with get_raw_connection() as conn:
+            sync_sql.revoke_user_account(conn, user_id=user_id)
+    except Exception as e:
+        revoke_ok = False
+        revoke_error = str(e)
+        log.exception("change-customer: account revoke failed post-commit")
+    with get_connection() as conn:
+        audit.record(
+            conn,
+            user_id=agent.user_id,
+            action=(
+                "customer_user.revoke_account"
+                if revoke_ok
+                else "customer_user.revoke_account.failed"
+            ),
+            entity_type="secure.customer_users",
+            entity_key=f"{user_id}|{new_code}",
+            notes=revoke_error or "dropped after customer change",
+            ip=_client_ip(request),
+        )
 
     return ChangeCustomerResponse(
         user_id=user_id,
         customer_code=new_code,
         previous_customer_code=customer_code,
         user_details_rows_removed=removed,
-        revoke_attempted=payload.revoke_access,
         revoke_ok=revoke_ok,
         revoke_error=revoke_error,
         updated=after or {"user_id": user_id, "customer_code": new_code},
