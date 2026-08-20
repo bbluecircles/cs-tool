@@ -171,7 +171,7 @@ export function ChangeCustomerModal({
         </div>
         <ul className="mt-1 space-y-1">
           <li>
-            Their existing database access is revoked — the MariaDB account
+            Their existing database access is revoked. The MariaDB account
             is dropped, so no privileges carry over from{' '}
             {currentCustomerName ?? 'the old customer'}.
           </li>
