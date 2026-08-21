@@ -484,9 +484,29 @@ _GRANT_GENERATORS: tuple[str, ...] = (
     # grant above is SELECT-only, so these table-scoped writes are required.
     *[_myuser_table_grant_sql(_t, _p) for _t, _p in _MYUSER_TABLE_GRANTS],
 
-    # State/claims DB (per-user database_name)
+    # State/claims DB (per-user database_name).
+    #
+    # LOWER() is load-bearing. This is the only generator that puts a
+    # DYNAMIC identifier in a GRANT — every other one names a hardcoded
+    # lowercase schema. The value is cd.database_name for discharge and
+    # pd.ppi_state for claims, and ppi_state holds state codes stored
+    # uppercase ("KS"), so without this we emit GRANT ... ON `KS`.*.
+    #
+    # The server runs with lower_case_table_names set, so a database
+    # cannot exist on disk under a mixed-case name — but a mixed-case
+    # GRANT still lands a mixed-case row in mysql.db, which MariaDB
+    # lowercases in memory at every startup with:
+    #
+    #   [Warning] 'db' entry 'ks jgiannotti@%' had database in mixed case
+    #   that has been forced to lowercase ... It will not be possible to
+    #   remove this privilege using REVOKE.
+    #
+    # Those rows are then unREVOKEable by name. Normalizing here, at the
+    # point the value becomes a SQL identifier, rather than lowercasing
+    # the stored column — other consumers read ppi_state/database_name
+    # and are not ours to change.
     """
-    SELECT CONCAT('GRANT SELECT ON `', database_name, '`.* TO `', user_id, '`@`%`;')
+    SELECT CONCAT('GRANT SELECT ON `', LOWER(database_name), '`.* TO `', user_id, '`@`%`;')
     FROM   myuser.user_details_2026
     WHERE  `disable` = 0 AND customer_code = :cc
     """,
