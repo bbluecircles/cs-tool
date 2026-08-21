@@ -8,6 +8,35 @@ NEVER return it on the list endpoint; a separate reveal endpoint handles
 that with audit logging. user_password is also DELIBERATELY excluded from
 FILTERABLE_COLUMNS — we don't want filter strings carrying password
 fragments to land in HTTP access logs.
+
+ESRI_ACCESS_NOTE
+----------------
+Two columns look like they control ESRI, and only one of them does
+anything at the database level:
+
+  * ``esri_access``     — the ONLY input to the MariaDB grant. The
+                          generator in sync_sql reads
+                          ``WHERE ... AND esri_access = 1`` and emits
+                          ``GRANT SELECT ON `esri`.*``. Matches the DBA's
+                          reference grant script.
+  * ``web_esri_access`` — a web-app feature flag. It appears in the
+                          refresh SELECT lists and NOWHERE in any grant
+                          generator, so on its own it grants nothing.
+
+The Users tab only ever exposed "Web ESRI"; ``esri_access`` is hidden in
+resourceConfigs.ts. Agents turned on the visible flag, reasonably assumed
+ESRI was granted, and the privilege was never issued — users then got
+"no permissions for ESRI" from the app.
+
+So writes here keep ``esri_access`` in step with ``web_esri_access``, in
+both directions. Mirroring only the on-direction would strand the flag
+permanently on, since nothing in the UI can turn the hidden column back
+off. An explicit ``esri_access`` in the payload still wins.
+
+Existing rows are corrected by db/migrations/002_esri_access_backfill.sql.
+Note that ``esri_state`` is a separate concern: it scopes WHICH states the
+user sees and is NOT part of the grant, so enabling access without setting
+it can still leave the user with an empty list.
 """
 
 from __future__ import annotations
@@ -248,7 +277,12 @@ def create_customer_user(conn: Connection, data: dict[str, Any]) -> None:
             "user_password": data.get("user_password"),
             "pw_flag": data.get("pw_flag", 1),
             "logging_flag": data.get("logging_flag", 0),
-            "esri_access": data.get("esri_access", 0),
+            # esri_access mirrors web_esri_access unless explicitly given.
+            # See ESRI_ACCESS_NOTE below — the UI only exposes the "Web
+            # ESRI" flag, but the MariaDB `esri` grant keys off this one.
+            "esri_access": data.get(
+                "esri_access", data.get("web_esri_access", 0)
+            ),
             "esri_tap_access": data.get("esri_tap_access", 0),
             "esri_state": data.get("esri_state", ""),
             "webuser": data.get("webuser", 1),
@@ -297,6 +331,18 @@ def update_customer_user(
         set_clauses.append(
             "`disable_date` = NOW()" if disabling else "`disable_date` = NULL"
         )
+
+    # Keep esri_access in step with web_esri_access. See ESRI_ACCESS_NOTE.
+    # Skipped when the caller set esri_access explicitly — an API client
+    # that names both columns means what it says, and appending a second
+    # assignment for the same column would be sloppy SQL.
+    if "web_esri_access" in changes and "esri_access" not in changes:
+        try:
+            enabling = int(changes["web_esri_access"]) == 1
+        except (TypeError, ValueError):
+            enabling = bool(changes["web_esri_access"])
+        set_clauses.append("`esri_access` = :esri_mirror")
+        params["esri_mirror"] = 1 if enabling else 0
 
     conn.execute(
         text(
