@@ -43,7 +43,9 @@ def _client_ip(request: Request) -> str:
 def list_ppi_datasets(
     _: Annotated[CurrentAgent, Depends(get_current_agent)],
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
+    # Ceiling sized for the table export, which pulls every filtered
+    # row in one request; the UI's own page-size selector tops out at 200.
+    page_size: int = Query(default=50, ge=1, le=5000),
     sort_by: str | None = Query(default=None, max_length=32),
     sort_dir: Literal["asc", "desc"] = "asc",
     filter: list[str] | None = Query(default=None),

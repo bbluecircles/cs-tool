@@ -4,6 +4,7 @@
  *   - Customer picker (only on resources whose rows belong to a customer)
  *   - Clear-all-filters button (visible whenever any filter is active)
  *   - Loading indicator
+ *   - Export menu (passed in — see `exportControl`)
  *   - Create button
  *
  * The customer picker here writes to the SAME filter list that the
@@ -11,6 +12,7 @@
  * agent picks "Sierra Vista" here, the per-column customer_code filter
  * shows "Sierra Vista". If they clear it from either place, both update.
  */
+import type { ReactNode } from 'react'
 import type { ResourceFilter } from '@/api/resources'
 import type { ResourceConfig } from './resourceConfigs'
 import { CustomerPicker } from './CustomerPicker'
@@ -21,6 +23,10 @@ interface ResourceToolbarProps {
   onFiltersChange: (next: ResourceFilter[]) => void
   onCreateClick: () => void
   isFetching: boolean
+  /** Rendered in the right-hand action group, left of Create. Passed in
+   *  rather than built here because the export menu needs the page's row
+   *  data, selection and totals — none of which the toolbar knows about. */
+  exportControl?: ReactNode
 }
 
 export function ResourceToolbar({
@@ -29,6 +35,7 @@ export function ResourceToolbar({
   onFiltersChange,
   onCreateClick,
   isFetching,
+  exportControl,
 }: ResourceToolbarProps) {
   const customerCode = pickCustomerCode(filters)
   const hasFilters = filters.length > 0
@@ -73,6 +80,7 @@ export function ResourceToolbar({
 
       <div className="ml-auto flex items-center gap-3">
         {isFetching && <span className="text-xs text-gray-500">Loading…</span>}
+        {exportControl}
         <button
           type="button"
           className="btn-primary"

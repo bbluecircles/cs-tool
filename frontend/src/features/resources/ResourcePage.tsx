@@ -5,7 +5,7 @@
  * table, pagination, and modals. Each tab is a fresh ResourcePage
  * instance keyed on slug, so switching tabs always starts clean.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   keepPreviousData,
   useMutation,
@@ -31,6 +31,8 @@ import { ConfirmSaveModal } from './ConfirmSaveModal'
 import { CreateRowModal } from './CreateRowModal'
 import { DeleteConfirmModal } from './DeleteConfirmModal'
 import { EditRowModal } from './EditRowModal'
+import { ExportMenu, type ExportScopeOption } from './ExportMenu'
+import { buildExportTable, deliverExport, type ExportFormat } from './export'
 import { PaginationFooter } from './PaginationFooter'
 import { ResourceTable } from './ResourceTable'
 import { ResourceToolbar } from './ResourceToolbar'
@@ -38,6 +40,16 @@ import type { ResourceConfig } from './resourceConfigs'
 import { useDirtyRows } from './useDirtyRows'
 
 type Row = Record<string, unknown>
+
+/**
+ * Page size for the export fetch loop. Larger than any page size the UI
+ * offers (which tops out at 200) so a normal table comes back in a single
+ * request — that also sidesteps LIMIT/OFFSET drift, where sorting on a
+ * non-unique column can repeat or skip rows across page boundaries.
+ * Matches the backend's page_size ceiling; tables bigger than this still
+ * export correctly, just over several requests.
+ */
+const EXPORT_PAGE_SIZE = 5000
 
 /** Local-timezone YYYY-MM-DD, for stamping cancelled_date. */
 function localToday(): string {
@@ -388,10 +400,134 @@ export function ResourcePage({ config }: ResourcePageProps) {
     setLastSelectedKey(key)
   }
 
+  /**
+   * Ctrl/Cmd-click: add or remove exactly this row, leaving the rest of
+   * the selection alone, and move the anchor here so a following
+   * shift-click extends from this row.
+   *
+   * This is what makes multiple disjoint ranges reachable. Plain click
+   * replaces the selection by design, so without an additive modifier
+   * the click that begins a second range would discard the first.
+   */
+  function onAdditiveSelect(row: Row) {
+    const key = config.rowKey(row)
+    setSelectedKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+    setLastSelectedKey(key)
+  }
+
   function onClearSelection() {
     setSelectedKeys(new Set())
     setLastSelectedKey(null)
   }
+
+  // --- export ---
+  // Scopes: the rows the agent picked, the page they're looking at, or
+  // everything the current filters match. Selected/page rows are already
+  // in memory; "all" re-queries with the same filters + sort so the file
+  // matches what a full scroll-through would show.
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportProgress, setExportProgress] = useState<{
+    loaded: number
+    total: number
+  } | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
+  // Ref, not state: the fetch loop reads this between pages and a state
+  // update wouldn't be visible to the already-running async function.
+  const exportCancelled = useRef(false)
+
+  async function fetchAllMatchingRows(): Promise<Row[] | null> {
+    const all: Row[] = []
+    let p = 1
+    for (;;) {
+      const res = await listResource<Row>(config.slug, {
+        page: p,
+        page_size: EXPORT_PAGE_SIZE,
+        sort_by,
+        sort_dir,
+        filters,
+      })
+      all.push(...res.rows)
+      setExportProgress({ loaded: all.length, total: res.total })
+      if (exportCancelled.current) return null
+      // Stop on a short/empty page too, so a shrinking result set (rows
+      // deleted mid-export) can't spin this loop forever.
+      if (all.length >= res.total || res.rows.length === 0) break
+      p += 1
+    }
+    return all
+  }
+
+  async function runExport(scopeId: string, format: ExportFormat) {
+    setExportError(null)
+    exportCancelled.current = false
+    setExportBusy(true)
+    try {
+      let data: Row[] | null
+      if (scopeId === 'selected') {
+        // Filter the visible rows rather than iterating selectedKeys, so
+        // the file keeps the on-screen order instead of click order.
+        data = rows.filter((r) => selectedKeys.has(config.rowKey(r)))
+      } else if (scopeId === 'page') {
+        data = rows
+      } else {
+        setExportProgress({ loaded: 0, total })
+        data = await fetchAllMatchingRows()
+      }
+
+      // Cancelled mid-fetch — leave quietly, no file, no error.
+      if (data === null) return
+      if (data.length === 0) {
+        setExportError('Nothing to export — that scope has no rows.')
+        return
+      }
+
+      await deliverExport(
+        buildExportTable(config, data, qc),
+        format,
+        config.slug,
+        scopeId,
+        config.shortLabel,
+      )
+    } catch (e) {
+      console.error('export failed', e)
+      setExportError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setExportBusy(false)
+      setExportProgress(null)
+    }
+  }
+
+  const exportScopes: ExportScopeOption[] = useMemo(() => {
+    const list: ExportScopeOption[] = []
+    if (selectedKeys.size > 0) {
+      list.push({
+        id: 'selected',
+        label: 'Selected rows',
+        count: selectedKeys.size,
+      })
+    }
+    list.push({ id: 'page', label: 'This page', count: rows.length })
+    list.push({
+      id: 'all',
+      label: 'All rows',
+      count: total,
+      hint: filters.length > 0 ? 'current filters applied' : undefined,
+    })
+    return list
+  }, [selectedKeys.size, rows.length, total, filters.length])
+
+  // Inline edits live in `dirty` until saved; the export reads the rows
+  // as the server returned them. Say so rather than shipping a file that
+  // silently disagrees with the screen.
+  const exportNote =
+    dirty.dirtyCount > 0
+      ? 'Unsaved edits are not included — save them first.'
+      : undefined
 
   // --- render ----
   const listError =
@@ -436,6 +572,14 @@ export function ResourcePage({ config }: ResourcePageProps) {
         onFiltersChange={setFilters}
         onCreateClick={() => setCreating(true)}
         isFetching={q.isFetching}
+        exportControl={
+          <ExportMenu
+            scopes={exportScopes}
+            onExport={(scope, format) => void runExport(scope, format)}
+            busy={exportBusy}
+            note={exportNote}
+          />
+        }
       />
 
       {/* Unsaved-changes / save-all banner. Shows in three flavors:
@@ -485,13 +629,76 @@ export function ResourcePage({ config }: ResourcePageProps) {
         </div>
       ) : null}
 
+      {/* Export status. Its own slot rather than sharing the save-all
+          banner above: an export can legitimately run while there are
+          unsaved edits, and the two messages shouldn't displace each
+          other. Only the "all rows" scope reports progress — the other
+          two are instantaneous. */}
+      {(exportProgress !== null || exportError !== null) && (
+        <div
+          className={clsx(
+            'flex items-center gap-3 rounded-md border px-3 py-2 text-sm text-gray-900',
+            exportError !== null
+              ? 'border-error-600/40 bg-error-100/40'
+              : 'border-secondary-500/40 bg-secondary-100/40',
+          )}
+        >
+          {exportError !== null ? (
+            <>
+              <span className="flex-1">Export failed: {exportError}</span>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => setExportError(null)}
+              >
+                Dismiss
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="flex-1">
+                Preparing export —{' '}
+                {exportProgress!.loaded.toLocaleString()} of{' '}
+                {exportProgress!.total.toLocaleString()} rows…
+              </span>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  exportCancelled.current = true
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Selection toolbar: appears whenever ≥1 row is selected. Bulk
-          delete was removed — selection is kept for visibility only. */}
+          delete was removed — selection is kept for visibility and
+          export. The export menu is repeated here (the toolbar has one
+          too) so the action sits where the agent's attention already is
+          right after making a selection. */}
       {selectedKeys.size > 0 && (
         <div className="flex items-center gap-3 rounded-md border border-secondary-500/40 bg-secondary-100/40 px-3 py-2 text-sm text-gray-900">
           <span className="flex-1">
             {selectedKeys.size} row{selectedKeys.size === 1 ? '' : 's'} selected
           </span>
+          <ExportMenu
+            scopes={[
+              {
+                id: 'selected',
+                label: 'Selected rows',
+                count: selectedKeys.size,
+              },
+            ]}
+            onExport={(scope, format) => void runExport(scope, format)}
+            buttonLabel={`Export ${selectedKeys.size} selected`}
+            variant="primary"
+            busy={exportBusy}
+            note={exportNote}
+          />
           <button
             type="button"
             className="btn-ghost"
@@ -531,6 +738,7 @@ export function ResourcePage({ config }: ResourcePageProps) {
         onToggleSelect={onToggleSelect}
         onSetSelection={onSetSelection}
         onShiftSelect={onShiftSelect}
+        onAdditiveSelect={onAdditiveSelect}
         onOpenEditModal={(row) => setEditTarget(row)}
       />
 

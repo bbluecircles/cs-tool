@@ -5,9 +5,16 @@ import {
   listAudit,
   retryGrants,
   retryRevokes,
+  type AuditEntry,
   type RetryResponse,
 } from '@/api/admin'
 import { CustomerSearchSelect } from '@/features/resources/CustomerSearchSelect'
+import { ExportMenu } from '@/features/resources/ExportMenu'
+import {
+  deliverExport,
+  type ExportFormat,
+  type ExportTable,
+} from '@/features/resources/export'
 
 export function AdminPage() {
   return (
@@ -205,9 +212,35 @@ function SyncCard() {
   )
 }
 
+/**
+ * The audit table isn't ResourceConfig-driven, so it can't go through
+ * buildExportTable — the shape is hand-built here. Column labels and
+ * order deliberately mirror the <Th> row below.
+ */
+const AUDIT_HEADERS = ['When', 'Agent', 'Action', 'Entity', 'Key', 'Notes', 'IP']
+const AUDIT_WIDTHS = [20, 18, 26, 26, 22, 50, 16]
+
+function buildAuditTable(entries: AuditEntry[]): ExportTable {
+  return {
+    headers: AUDIT_HEADERS,
+    widths: AUDIT_WIDTHS,
+    rows: entries.map((e) => [
+      e.created_at.replace('T', ' ').slice(0, 19),
+      e.user_id,
+      e.action,
+      e.entity_type,
+      e.entity_key,
+      e.notes,
+      e.ip,
+    ]),
+  }
+}
+
 function AuditCard() {
   const [prefix, setPrefix] = useState('')
   const [limit, setLimit] = useState(100)
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   const q = useQuery({
     queryKey: ['audit', { prefix, limit }],
@@ -218,6 +251,30 @@ function AuditCard() {
       }),
     refetchInterval: 15_000,
   })
+
+  const entries = q.data?.entries ?? []
+
+  // Exports exactly what's loaded. The endpoint takes a row limit rather
+  // than paginating, so "everything" here means "the current limit" —
+  // the scope label says so instead of implying a full-history dump.
+  async function runAuditExport(format: ExportFormat) {
+    setExportBusy(true)
+    setExportError(null)
+    try {
+      await deliverExport(
+        buildAuditTable(entries),
+        format,
+        'audit-log',
+        'entries',
+        'Audit log',
+      )
+    } catch (e) {
+      console.error('audit export failed', e)
+      setExportError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setExportBusy(false)
+    }
+  }
 
   return (
     <div className="card p-5 space-y-3">
@@ -254,8 +311,26 @@ function AuditCard() {
               <option value={500}>500</option>
             </select>
           </div>
+          <ExportMenu
+            scopes={[
+              {
+                id: 'entries',
+                label: 'Loaded entries',
+                count: entries.length,
+                hint: 'as filtered above',
+              },
+            ]}
+            onExport={(_scope, format) => void runAuditExport(format)}
+            busy={exportBusy}
+          />
         </div>
       </div>
+
+      {exportError && (
+        <div className="rounded-md border border-error-600/30 bg-error-100/40 px-3 py-2 text-sm text-error-600">
+          Export failed: {exportError}
+        </div>
+      )}
 
       <div className="overflow-auto max-h-[60vh] border border-border rounded-md">
         <table className="w-full text-sm border-collapse">

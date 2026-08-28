@@ -26,6 +26,8 @@ import clsx from 'clsx'
 import type { ResourceFilter } from '@/api/resources'
 import { fetchDbDatabases, listResource } from '@/api/resources'
 import type { ColumnDef as ResourceColumnDef, ResourceConfig } from './resourceConfigs'
+import { colOrderKey, loadColumnOrder } from './columnOrder'
+import { formatReadonly } from './cellDisplay'
 import { ColumnFilterInput } from './ColumnFilterInput'
 import { EditableCell } from './EditableCell'
 import { lookupDbFeatures } from './DatabasePicker'
@@ -78,6 +80,12 @@ interface ResourceTableProps {
   /** Shift-click on a row's checkbox — range select from the previous
    *  anchor to this row, inclusive (additive to existing selection). */
   onShiftSelect?: (row: Row) => void
+  /** Ctrl/Cmd-click on a row's checkbox — add or remove this one row
+   *  without disturbing the rest of the selection, and move the anchor
+   *  here. Plain click deliberately REPLACES the selection, so without
+   *  this there's no way to build up two disjoint ranges: the plain
+   *  click that starts the second range wipes the first. */
+  onAdditiveSelect?: (row: Row) => void
   /** Double-click on the row body (excluding the checkbox cell) — opens
    *  the per-row edit modal. */
   onOpenEditModal?: (row: Row) => void
@@ -106,6 +114,7 @@ export function ResourceTable({
   selectedKeys = EMPTY_SET,
   onToggleSelect,
   onShiftSelect,
+  onAdditiveSelect,
   onOpenEditModal,
 }: ResourceTableProps) {
   const visibleConfigCols = useMemo(
@@ -687,11 +696,13 @@ export function ResourceTable({
                     onOpenEditModal(row.original as Row)
                   }}
                 >
-                  {/* Selection checkbox cell. Click toggles; shift-
-                      click range-selects from the previous anchor.
-                      When the row is selected, this cell also paints
-                      a left-edge accent stripe so the row pops out
-                      even with cursory scanning. */}
+                  {/* Selection checkbox cell. Click replaces the
+                      selection with this row; shift-click range-selects
+                      from the previous anchor; ctrl/cmd-click adds or
+                      removes this row alone (so several disjoint
+                      ranges are possible). When the row is selected,
+                      this cell also paints a left-edge accent stripe
+                      so the row pops out even with cursory scanning. */}
                   <td
                     className={clsx(
                       'px-2 py-1.5 border-b border-divider w-8 relative',
@@ -719,11 +730,18 @@ export function ResourceTable({
                         'transition-colors',
                       )}
                       checked={isSelected}
+                      title="Click to select · Shift-click for a range · Ctrl/Cmd-click to add one row"
+                      aria-label="Select row"
                       onChange={() => {}}
                       onClick={(e) => {
                         e.stopPropagation()
+                        // Order matters: shift wins over ctrl/cmd, so
+                        // shift+ctrl still extends a range rather than
+                        // toggling one row.
                         if (e.shiftKey) {
                           onShiftSelect?.(row.original as Row)
+                        } else if (e.ctrlKey || e.metaKey) {
+                          onAdditiveSelect?.(row.original as Row)
                         } else {
                           onToggleSelect?.(row.original as Row)
                         }
@@ -781,13 +799,6 @@ function LoadingRow({ columnCount }: { columnCount: number }) {
   )
 }
 
-function formatReadonly(kind: string, value: unknown): string {
-  if (value === null || value === undefined || value === '') return '—'
-  if (kind === 'datetime') return String(value).replace('T', ' ').slice(0, 16)
-  if (kind === 'flag') return value === 1 || value === '1' ? 'Yes' : 'No'
-  return String(value)
-}
-
 /**
  * Predicted column width (px), derived from the column NAME plus a
  * content-aware floor by kind. Headers are allowed to wrap, so the width
@@ -818,60 +829,4 @@ function predictColumnWidthPx(col: ResourceColumnDef): number {
   }
 
   return Math.min(Math.max(labelPx, kindMin), 240)
-}
-
-// --- column-order persistence (localStorage, per table) -------------------
-
-// v2: bumped when the default column order changed (Users left-shift) so
-// stored orders from before don't mask the new default. Old keys are
-// simply abandoned (harmless localStorage cruft).
-const COL_ORDER_PREFIX = 'cs-tool:colorder:v2:'
-
-function colOrderKey(slug: string): string {
-  return COL_ORDER_PREFIX + slug
-}
-
-function defaultColumnOrder(
-  cols: ResourceColumnDef[],
-  preferred?: string[],
-): string[] {
-  if (preferred && preferred.length > 0) {
-    const visibleKeys = new Set(cols.map((c) => c.key))
-    // Preferred keys first (only those actually visible), then the rest in
-    // config order, then the pinned actions column.
-    const head = preferred.filter((k) => visibleKeys.has(k))
-    const headSet = new Set(head)
-    const tail = cols.map((c) => c.key).filter((k) => !headSet.has(k))
-    return [...head, ...tail, '__actions']
-  }
-  return [...cols.map((c) => c.key), '__actions']
-}
-
-/**
- * Load the saved column order for a table, reconciled against the current
- * columns: unknown ids are dropped, newly-added columns are appended, and
- * the trailing actions column is always pinned last. `preferred` sets the
- * default order used when nothing is stored yet (config.tableColumnOrder).
- */
-function loadColumnOrder(
-  slug: string,
-  cols: ResourceColumnDef[],
-  preferred?: string[],
-): string[] {
-  const def = defaultColumnOrder(cols, preferred)
-  try {
-    const raw = localStorage.getItem(colOrderKey(slug))
-    if (!raw) return def
-    const stored = JSON.parse(raw) as unknown
-    if (!Array.isArray(stored)) return def
-    const valid = new Set(def)
-    const kept = stored.filter(
-      (id): id is string =>
-        typeof id === 'string' && valid.has(id) && id !== '__actions',
-    )
-    const missing = def.filter((id) => id !== '__actions' && !kept.includes(id))
-    return [...kept, ...missing, '__actions']
-  } catch {
-    return def
-  }
 }
