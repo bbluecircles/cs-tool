@@ -169,6 +169,11 @@ function safeSheetName(name: string): string {
   return (cleaned || 'Sheet1').slice(0, 31)
 }
 
+// Workbook fills, matching the banding CS already uses in their sheets:
+// a solid teal header over data rows that alternate untinted / teal.
+const XLSX_HEADER_FILL = '#7DCFD5'
+const XLSX_BAND_FILL = '#CAEBEE'
+
 export async function toXlsx(
   table: ExportTable,
   sheetName: string,
@@ -178,16 +183,25 @@ export async function toXlsx(
   const header = table.headers.map((h) => ({
     value: h,
     fontWeight: 'bold' as const,
-    backgroundColor: '#EFEFEF',
+    backgroundColor: XLSX_HEADER_FILL,
   }))
 
-  const body = table.rows.map((row) =>
-    row.map((v) => {
-      if (v === null) return null
-      if (typeof v === 'number') return { value: v, type: Number }
-      return { value: v, type: String }
-    }),
-  )
+  const body = table.rows.map((row, i) => {
+    // First data row is left untinted so the first band lands on the
+    // second — the pattern in the reference sheets.
+    const fill = i % 2 === 1 ? XLSX_BAND_FILL : undefined
+    return row.map((v) => {
+      // An empty cell still has to carry the fill, otherwise the band
+      // breaks into white gaps wherever a row has a blank column. The
+      // library drops `backgroundColor: undefined`, so unbanded rows
+      // come out unstyled as before.
+      if (v === null) return fill ? { backgroundColor: fill } : null
+      if (typeof v === 'number') {
+        return { value: v, type: Number, backgroundColor: fill }
+      }
+      return { value: v, type: String, backgroundColor: fill }
+    })
+  })
 
   return writeXlsxFile([header, ...body], {
     sheet: safeSheetName(sheetName),
