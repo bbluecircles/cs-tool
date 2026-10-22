@@ -523,8 +523,13 @@ export const customerUsersConfig: ResourceConfig = {
 // 'customer-datasets' and the underlying table is secure.customer_dataset).
 //
 // HIDDEN FROM UI: sg2, sg2_op, claritas_flag, prism_flag, projection_flag,
-// transfers_flag, cell_size_limit, export_detail, export_row_limit,
-// webapp_flag, claritas_state, cms_states, export_flag.
+// transfers_flag, export_detail, export_row_limit, webapp_flag,
+// claritas_state, cms_states, export_flag.
+//
+// cell_size_limit stays visible and editable. It is one value per customer
+// database (secure.customer_dataset); the refresh copies it onto every
+// user of that customer for that database. Range matches the create-user
+// schema and edit registry: 0..100000.
 //
 // dataset_type is settable on create (the UX needs the discharge/claims
 // distinction at create time) but read-only after — agents shouldn't be
@@ -548,7 +553,7 @@ export const customerDatasetsConfig: ResourceConfig = {
   sortableColumns: new Set([
     'rec_id', 'customer_code', 'customer_name', 'database_name',
     'inpatient', 'outpatient', 'ed',
-    'aprdrg_flag',
+    'aprdrg_flag', 'cell_size_limit',
     'create_date', 'modify_date',
   ]),
   // No toolbar customer dropdown — filter via the per-column Code (int) /
@@ -624,6 +629,11 @@ export const customerDatasetsConfig: ResourceConfig = {
         f.aprdrg ? null : { disabled: true, valueOverride: 0 },
     }),
     {
+      key: 'cell_size_limit', label: 'Cell Size', kind: 'int', editable: true,
+      min: 0, max: 100_000,
+      showInCreate: true, requiredOnCreate: true, createDefault: 0,
+    },
+    {
       key: 'export_flag', label: 'Export', kind: 'flag', editable: true,
       options: yesNoOptions, showInCreate: false, createDefault: 1,
       show: false,
@@ -645,9 +655,11 @@ export const customerDatasetsConfig: ResourceConfig = {
 // PPI Datasets ("Claim Databases" in the UI; backend slug stays 'ppi-datasets'
 // and the underlying table is secure.ppi_dataset).
 //
-// HIDDEN FROM UI: ppi_detail, ppi_summary, cell_size_limit, export_detail.
-// Underlying columns still exist in secure.ppi_dataset and are still written
-// at create time by ppi_dataset_repo.
+// HIDDEN FROM UI: ppi_detail, ppi_summary, export_detail.
+// cell_size_limit stays visible and editable (one value per claim state,
+// secure.ppi_dataset). Range 0..100000, same as discharge.
+// Underlying hidden columns still exist in secure.ppi_dataset and are still
+// written at create time by ppi_dataset_repo.
 // ---------------------------------------------------------------------------
 
 export const ppiDatasetsConfig: ResourceConfig = {
@@ -660,6 +672,7 @@ export const ppiDatasetsConfig: ResourceConfig = {
   primaryKeyColumns: ['rec_id'],
   sortableColumns: new Set([
     'rec_id', 'customer_code', 'customer_name', 'ppi_state',
+    'cell_size_limit',
     'create_date', 'modify_date',
   ]),
   // No toolbar customer dropdown — filter via the per-column Code (int) /
@@ -712,6 +725,13 @@ export const ppiDatasetsConfig: ResourceConfig = {
       emphasize: true,
       // Full-width and stacked under Code (single-column modal) so the
       // chip list can grow downward without looking cramped.
+      createSpan: 2,
+    },
+    {
+      key: 'cell_size_limit', label: 'Cell Size', kind: 'int', editable: true,
+      min: 0, max: 100_000,
+      showInCreate: true, requiredOnCreate: true, createDefault: 0,
+      // Full-width so it stacks under State in the single-column modal.
       createSpan: 2,
     },
     {
