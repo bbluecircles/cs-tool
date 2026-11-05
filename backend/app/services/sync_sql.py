@@ -202,8 +202,7 @@ _REBUILDS: tuple[_Rebuild, ...] = (
         cd.cell_size_limit, cd.export_detail,
         cu.web_esri_access, cu.web_esri_tap_access,
         cu.web_inpatient_access, cu.web_outpatient_access,
-        cu.web_ed_access, cu.web_claims_access,
-        cu.provider_directory_access
+        cu.web_ed_access, cu.web_claims_access
     FROM secure.customer c
     JOIN secure.customer_users cu    ON c.customer_code = cu.customer_code
     JOIN secure.customer_dataset cd  ON c.customer_code = cd.customer_code
@@ -229,8 +228,7 @@ _REBUILDS: tuple[_Rebuild, ...] = (
         pd.cell_size_limit, pd.export_detail,
         cu.web_esri_access, cu.web_esri_tap_access,
         cu.web_inpatient_access, cu.web_outpatient_access,
-        cu.web_ed_access, cu.web_claims_access,
-        cu.provider_directory_access
+        cu.web_ed_access, cu.web_claims_access
     FROM   secure.customer c
     JOIN   secure.customer_users cu  ON c.customer_code = cu.customer_code
     INNER JOIN secure.ppi_dataset pd ON c.customer_code = pd.customer_code
@@ -295,8 +293,7 @@ _REBUILDS: tuple[_Rebuild, ...] = (
         s.cell_size_limit, s.export_detail,
         s.web_esri_access, s.web_esri_tap_access,
         s.web_inpatient_access, s.web_outpatient_access,
-        s.web_ed_access, s.web_claims_access,
-        s.provider_directory_access
+        s.web_ed_access, s.web_claims_access
     FROM secure.user_details_internal_2026 s
     """),
     # --- imic_control.user_details ---
