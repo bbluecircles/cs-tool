@@ -418,6 +418,7 @@ export const customerUsersConfig: ResourceConfig = {
     'web_esri_access', 'web_esri_tap_access',
     'web_inpatient_access', 'web_outpatient_access',
     'web_ed_access', 'web_claims_access',
+    'provider_directory_access',
     'create_date', 'modify_date',
   ]),
   // No toolbar customer dropdown — filter by customer via the per-column
@@ -509,6 +510,15 @@ export const customerUsersConfig: ResourceConfig = {
     flag('web_claims_access', 'Web Claims'),
     flag('web_esri_access', 'Web ESRI'),
     flag('web_esri_tap_access', 'Web ESRI TAP'),
+    // Provider Directory: not shown yet — hidden from the table and the
+    // create form (new users get 0 from the backend's create default).
+    // The backend already lists/edits it and the refresh copies it into
+    // secure.user_details_internal_2026 + myuser.user_details_2026, so
+    // revealing it is just removing `show: false` / `showInCreate: false`.
+    flag('provider_directory_access', 'Provider Directory', {
+      showInCreate: false,
+      show: false,
+    }),
     {
       key: 'esri_state', label: 'ESRI States', kind: 'text', editable: true,
       maxLength: 254, show: false, showInCreate: false,

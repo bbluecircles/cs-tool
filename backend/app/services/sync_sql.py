@@ -1,37 +1,89 @@
 """Canonical refresh and grant SQL.
 
-``refresh_all`` rebuilds every ``user_details*`` denormalized view. In the
-current deployment model an external process owns this refresh, so we
-DON'T call it automatically after writes. The function remains available
-for:
-  - the admin "Retry refresh" action
-  - future redeployment scenarios where the external process is retired
+``refresh_all`` rebuilds every ``user_details*`` lookup table from the
+canonical secure.customer / customer_users / customer_dataset / ppi_dataset
+tables. Admin -> "Run grants" calls it (forced) before generating grants,
+so a user created moments ago is visible to the grant generators. The
+retry-refresh endpoint and ``python -m app.scripts.refresh_user_details``
+call it too. Read "Lookup-table refresh" below before changing it.
 
 ``grants_for_customer`` runs the per-customer CREATE USER / GRANT
 statements. Called only from the admin "Run grants" action — CS agents
 decide when to run it.
-
-Both functions are unchanged from the previous version; only the calling
-convention has moved.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from app.core.config import get_settings
+from app.db.session import get_engine
 
 log = logging.getLogger(__name__)
 
 
-_REFRESH_STATEMENTS: tuple[str, ...] = (
+# ---------------------------------------------------------------------------
+# Lookup-table refresh
+# ---------------------------------------------------------------------------
+# The refresh used to run, per table, on an AUTOCOMMIT connection:
+#
+#     TRUNCATE TABLE t;               -- DDL: commits on the spot, no undo
+#     INSERT IGNORE INTO t SELECT ... -- positional: t needs exactly as many
+#                                     -- columns as the SELECT returns
+#
+# In Nov 2026 a column was added to secure.user_details_internal_2026. The
+# next "Run grants" truncated it, the INSERT failed with 1136 "Column count
+# doesn't match value count", and the table was left with 0 rows — on the
+# primary and on every replica, because the TRUNCATE replicates and the
+# failed INSERT doesn't. Any failure between the two statements (lock wait
+# timeout, deadlock, dropped connection, service restart) did the same.
+#
+# How it works now:
+#   1. Preflight, before anything is written: every target table must
+#      exist and be InnoDB (only InnoDB can roll back), and every column its
+#      SELECT produces must exist in it. Any miss refuses the whole refresh
+#      with nothing touched.
+#   2. One transaction covers all eight tables: DELETE + INSERT, never
+#      TRUNCATE. Any error rolls every table back to exactly what it held,
+#      and a rolled-back transaction writes nothing to the binlog, so
+#      replicas never see it. Readers — on the primary and on replicas —
+#      keep seeing the old rows until COMMIT, so no table ever reads empty.
+#      Nothing inside the transaction may be DDL (TRUNCATE, ALTER, CREATE,
+#      ...): MariaDB commits DDL implicitly, which would end it early.
+#   3. INSERTs name their columns, taken from the SELECT's own output names
+#      (the first SELECT of a UNION). A column added to a target table later
+#      takes its default (logged as a warning) instead of breaking the
+#      INSERT, and a reordered table can't have values filed under the
+#      wrong column.
+#   4. Before COMMIT, each table's new row count is checked against its old
+#      one: emptying a populated table is always refused, and so is
+#      shrinking one by more than REFRESH_MAX_SHRINK_PCT.
+#
+# The rebuild transaction does no plain (snapshot) reads — row counts come
+# from the DELETE/INSERT affected-row counts — because with MariaDB's
+# innodb_snapshot_isolation (on by default from 11.6) a locking read of a
+# row changed after the transaction's snapshot fails with error 1020.
+#
+# Order matters: the myuser / imic_control rebuilds read the secure tables,
+# and inside the transaction they see the rows just rebuilt.
+
+
+@dataclass(frozen=True)
+class _Rebuild:
+    """One lookup table and the SELECT that produces its rows. Every output
+    column name of the SELECT must be a column of ``table``; together they
+    become the INSERT's column list (see _preflight)."""
+    table: str
+    select_sql: str
+
+
+_REBUILDS: tuple[_Rebuild, ...] = (
     # --- secure.user_details_internal ---
-    "TRUNCATE TABLE secure.user_details_internal",
-    """
-    INSERT IGNORE INTO secure.user_details_internal
+    _Rebuild("secure.user_details_internal", """
     SELECT
         cu.user_id, cu.e_mail, cu.`disable`,
         c.customer_name, c.customer_code,
@@ -78,11 +130,9 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
     JOIN   secure.customer_users cu  ON c.customer_code = cu.customer_code
     INNER JOIN secure.ppi_dataset pd ON c.customer_code = pd.customer_code
     WHERE  cu.`disable` = 0
-    """,
+    """),
     # --- secure.user_details_internal_2023 ---
-    "TRUNCATE TABLE secure.user_details_internal_2023",
-    """
-    INSERT IGNORE INTO secure.user_details_internal_2023
+    _Rebuild("secure.user_details_internal_2023", """
     SELECT
         cu.user_id, cu.e_mail, cu.`disable`,
         c.customer_name, c.customer_code,
@@ -133,11 +183,9 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
     JOIN   secure.customer_users cu  ON c.customer_code = cu.customer_code
     INNER JOIN secure.ppi_dataset pd ON c.customer_code = pd.customer_code
     WHERE  cu.`disable` = 0
-    """,
+    """),
     # --- secure.user_details_internal_2026 ---
-    "TRUNCATE TABLE secure.user_details_internal_2026",
-    """
-    INSERT IGNORE INTO secure.user_details_internal_2026
+    _Rebuild("secure.user_details_internal_2026", """
     SELECT
         cu.user_id, cu.e_mail, cu.`disable`,
         c.customer_name, c.customer_code,
@@ -154,7 +202,8 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         cd.cell_size_limit, cd.export_detail,
         cu.web_esri_access, cu.web_esri_tap_access,
         cu.web_inpatient_access, cu.web_outpatient_access,
-        cu.web_ed_access, cu.web_claims_access
+        cu.web_ed_access, cu.web_claims_access,
+        cu.provider_directory_access
     FROM secure.customer c
     JOIN secure.customer_users cu    ON c.customer_code = cu.customer_code
     JOIN secure.customer_dataset cd  ON c.customer_code = cd.customer_code
@@ -180,16 +229,15 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         pd.cell_size_limit, pd.export_detail,
         cu.web_esri_access, cu.web_esri_tap_access,
         cu.web_inpatient_access, cu.web_outpatient_access,
-        cu.web_ed_access, cu.web_claims_access
+        cu.web_ed_access, cu.web_claims_access,
+        cu.provider_directory_access
     FROM   secure.customer c
     JOIN   secure.customer_users cu  ON c.customer_code = cu.customer_code
     INNER JOIN secure.ppi_dataset pd ON c.customer_code = pd.customer_code
     WHERE  cu.`disable` = 0
-    """,
+    """),
     # --- myuser.user_details (encrypted password variant) ---
-    "TRUNCATE TABLE myuser.user_details",
-    """
-    INSERT IGNORE INTO myuser.user_details
+    _Rebuild("myuser.user_details", """
     SELECT
         s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
         s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
@@ -207,11 +255,9 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         s.web_inpatient_access, s.web_outpatient_access,
         s.web_ed_access, s.web_claims_access
     FROM secure.user_details_internal s
-    """,
+    """),
     # --- myuser.user_details_2023 ---
-    "TRUNCATE TABLE myuser.user_details_2023",
-    """
-    INSERT IGNORE INTO myuser.user_details_2023
+    _Rebuild("myuser.user_details_2023", """
     SELECT
         s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
         s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
@@ -230,11 +276,9 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         s.web_inpatient_access, s.web_outpatient_access,
         s.web_ed_access, s.web_claims_access
     FROM secure.user_details_internal_2023 s
-    """,
+    """),
     # --- myuser.user_details_2026 ---
-    "TRUNCATE TABLE myuser.user_details_2026",
-    """
-    INSERT IGNORE INTO myuser.user_details_2026
+    _Rebuild("myuser.user_details_2026", """
     SELECT
         s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
         s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
@@ -251,13 +295,12 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         s.cell_size_limit, s.export_detail,
         s.web_esri_access, s.web_esri_tap_access,
         s.web_inpatient_access, s.web_outpatient_access,
-        s.web_ed_access, s.web_claims_access
+        s.web_ed_access, s.web_claims_access,
+        s.provider_directory_access
     FROM secure.user_details_internal_2026 s
-    """,
+    """),
     # --- imic_control.user_details ---
-    "TRUNCATE TABLE imic_control.user_details",
-    """
-    INSERT IGNORE INTO imic_control.user_details
+    _Rebuild("imic_control.user_details", """
     SELECT
         s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
         s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
@@ -275,11 +318,9 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         s.web_inpatient_access, s.web_outpatient_access,
         s.web_ed_access, s.web_claims_access
     FROM secure.user_details_internal s
-    """,
+    """),
     # --- imic_control.user_details_2023 (discharge datasets only) ---
-    "TRUNCATE TABLE imic_control.user_details_2023",
-    """
-    INSERT IGNORE INTO imic_control.user_details_2023
+    _Rebuild("imic_control.user_details_2023", """
     SELECT
         s.user_id, s.e_mail, s.`disable`, s.customer_name, s.customer_code,
         s.database_name, s.sg2, s.sg2_op, s.inpatient, s.outpatient, s.ed,
@@ -299,7 +340,7 @@ _REFRESH_STATEMENTS: tuple[str, ...] = (
         s.web_ed_access, s.web_claims_access
     FROM secure.user_details_internal_2023 s
     WHERE s.dataset_type = 'd'
-    """,
+    """),
 )
 
 
@@ -307,38 +348,219 @@ class RefreshDisabled(RuntimeError):
     """Raised when refresh_all is called while ENABLE_VIEW_REFRESH is off."""
 
 
-def refresh_all(conn: Connection, *, force: bool = False) -> None:
-    """Truncate and rebuild every user_details* view, serialized by advisory
-    lock. Respects ENABLE_VIEW_REFRESH — if the flag is off, refuses to run
-    rather than silently doing nothing, so the admin UI can show a clear
-    "disabled by config" message.
+class RefreshRefused(RuntimeError):
+    """A safety check stopped the refresh. Nothing was changed: either the
+    preflight refused before any write, or the transaction rolled back."""
 
-    Pass force=True to bypass the config flag. Used by retry_grants, which
-    needs the refresh to happen unconditionally — otherwise a brand-new
-    user inserted seconds ago wouldn't show up in user_details_internal_2026
-    and the grants step would generate zero statements with no error,
-    leaving the agent with a "0 statements applied" success message and a
-    user who can't log in.
+
+@dataclass(frozen=True)
+class TableRefresh:
+    table: str
+    rows_before: int
+    rows_after: int
+    # Columns of the table the refresh doesn't write, so they took their
+    # default. Usually a column added to the table without a SELECT change.
+    defaulted_columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RefreshReport:
+    tables: tuple[TableRefresh, ...]
+    committed: bool  # False for a dry run, which rolls back on purpose
+
+    def summary(self) -> str:
+        """One line for the log and the audit trail."""
+        counts = "; ".join(
+            f"{t.table} {t.rows_before}->{t.rows_after}" for t in self.tables
+        )
+        return ("committed: " if self.committed else "dry run, rolled back: ") + counts
+
+
+def describe_db_error(e: BaseException) -> str:
+    """The driver's message, e.g. (1054, "Unknown column ..."), without the
+    full statement text SQLAlchemy appends — that runs to pages here."""
+    return str(getattr(e, "orig", None) or e)
+
+
+def _quote_ident(name: str) -> str:
+    return "`" + name.replace("`", "``") + "`"
+
+
+def _preflight(
+    conn: Connection, rb: _Rebuild
+) -> tuple[list[str], tuple[str, ...]]:
+    """Check one rebuild without writing anything. Returns the INSERT column
+    list (the SELECT's output names, in order) and the table's columns the
+    refresh doesn't write. Raises RefreshRefused on any problem."""
+    schema, _, table = rb.table.partition(".")
+    found = conn.execute(
+        text(
+            "SELECT TABLE_TYPE, ENGINE FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA = :s AND TABLE_NAME = :t"
+        ),
+        {"s": schema, "t": table},
+    ).first()
+    if found is None:
+        raise RefreshRefused(
+            f"{rb.table} does not exist, or the service account can't see it."
+        )
+    table_type, engine = found
+    if table_type != "BASE TABLE":
+        raise RefreshRefused(f"{rb.table} is a {table_type}, not a table.")
+    if (engine or "").lower() != "innodb":
+        raise RefreshRefused(
+            f"{rb.table} uses the {engine} storage engine. The refresh only "
+            f"rebuilds InnoDB tables, because only InnoDB can roll back a "
+            f"rebuild that fails part-way."
+        )
+
+    table_cols = [
+        r[0]
+        for r in conn.execute(
+            text(
+                "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = :s AND TABLE_NAME = :t "
+                "ORDER BY ORDINAL_POSITION"
+            ),
+            {"s": schema, "t": table},
+        )
+    ]
+
+    # LIMIT 0 makes MariaDB parse and resolve the SELECT — an unknown source
+    # column fails here — and report its output column names, without
+    # reading any rows. On its own line so a trailing comment can't eat it.
+    try:
+        select_cols = list(
+            conn.execute(text(f"{rb.select_sql.strip()}\nLIMIT 0")).keys()
+        )
+    except Exception as e:
+        raise RefreshRefused(
+            f"The source query for {rb.table} fails: {describe_db_error(e)}"
+        ) from e
+
+    lowered = [c.lower() for c in select_cols]
+    repeated = sorted({c for c in select_cols if lowered.count(c.lower()) > 1})
+    if repeated:
+        raise RefreshRefused(
+            f"The source query for {rb.table} returns "
+            f"{', '.join(repeated)} more than once."
+        )
+    present = {c.lower() for c in table_cols}
+    missing = [c for c in select_cols if c.lower() not in present]
+    if missing:
+        raise RefreshRefused(
+            f"{rb.table} has no column {', '.join(missing)}, which the "
+            f"refresh writes. Add it to the table (see db/migrations) first."
+        )
+    written = set(lowered)
+    defaulted = tuple(c for c in table_cols if c.lower() not in written)
+    return select_cols, defaulted
+
+
+def _check_row_counts(table: str, before: int, after: int) -> None:
+    """Refuse a rebuild that empties or badly shrinks a populated table.
+    Raising here rolls back the whole transaction."""
+    if before > 0 and after <= 0:
+        raise RefreshRefused(
+            f"Rebuilding {table} produced 0 rows (it has {before}). Refusing "
+            f"to empty it; nothing was changed."
+        )
+    limit = get_settings().refresh_max_shrink_pct
+    if before > 0 and limit < 100 and (before - after) * 100 > before * limit:
+        raise RefreshRefused(
+            f"Rebuilding {table} would shrink it from {before} to {after} "
+            f"rows ({(before - after) * 100 // before}% fewer; the limit is "
+            f"REFRESH_MAX_SHRINK_PCT={limit}). Nothing was changed. If that "
+            f"drop is expected, raise REFRESH_MAX_SHRINK_PCT in the backend "
+            f".env and restart the service."
+        )
+
+
+def _rebuild(
+    conn: Connection, plans: list[tuple[_Rebuild, list[str], tuple[str, ...]]]
+) -> tuple[TableRefresh, ...]:
+    """DELETE + INSERT every table, in order, inside the caller's
+    transaction. Counts come from affected rows: no snapshot reads."""
+    results: list[TableRefresh] = []
+    for rb, columns, defaulted in plans:
+        before = conn.execute(text(f"DELETE FROM {rb.table}")).rowcount
+        column_list = ", ".join(_quote_ident(c) for c in columns)
+        after = conn.execute(
+            text(
+                f"INSERT IGNORE INTO {rb.table} ({column_list})\n"
+                f"{rb.select_sql.strip()}"
+            )
+        ).rowcount
+        _check_row_counts(rb.table, before, after)
+        if defaulted:
+            log.warning(
+                "refresh: %s has columns the refresh doesn't write; they "
+                "were left at their default: %s",
+                rb.table, ", ".join(defaulted),
+            )
+        results.append(TableRefresh(rb.table, before, after, defaulted))
+    return tuple(results)
+
+
+def refresh_all(*, force: bool = False, dry_run: bool = False) -> RefreshReport:
+    """Rebuild every user_details* lookup table in one transaction: all of
+    them change, or none do. See "Lookup-table refresh" above.
+
+    Respects ENABLE_VIEW_REFRESH unless force=True. retry_grants forces it:
+    without a refresh, a user created seconds ago isn't in
+    user_details_internal_2026 yet, so the grants step would generate zero
+    statements and report success for a user who can't log in.
+
+    dry_run=True does the whole rebuild, reports the row counts, then rolls
+    back — nothing is written. It still holds a real refresh's locks while
+    it runs.
+
+    Raises RefreshRefused when a safety check stops it, RefreshDisabled when
+    the config flag is off, and lets database errors propagate. In every
+    one of those cases nothing was changed.
     """
-    if not force and not get_settings().enable_view_refresh:
+    if not force and not dry_run and not get_settings().enable_view_refresh:
         raise RefreshDisabled(
             "View refresh is disabled via ENABLE_VIEW_REFRESH=false."
         )
 
-    got_lock = conn.execute(
-        text("SELECT GET_LOCK('cs_tool_refresh', 30)")
-    ).scalar()
-    if not got_lock:
-        raise RuntimeError(
-            "Could not acquire cs_tool_refresh lock within 30s; "
-            "another refresh is in flight."
-        )
-    try:
-        for stmt in _REFRESH_STATEMENTS:
-            conn.execute(text(stmt))
-        log.info("refresh_all: completed %d statements", len(_REFRESH_STATEMENTS))
-    finally:
-        conn.execute(text("SELECT RELEASE_LOCK('cs_tool_refresh')"))
+    # Its own connection, never a caller's: the rebuild has to own its
+    # transaction. On an AUTOCOMMIT connection every DELETE would commit on
+    # its own — the failure this replaces.
+    with get_engine().connect() as conn:
+        # Session-scoped and not transactional, so the rollbacks and commit
+        # below don't release it; the finally does.
+        got_lock = conn.execute(
+            text("SELECT GET_LOCK('cs_tool_refresh', 30)")
+        ).scalar()
+        if not got_lock:
+            raise RuntimeError(
+                "Could not acquire cs_tool_refresh lock within 30s; "
+                "another refresh is in flight."
+            )
+        try:
+            plans = [(rb, *_preflight(conn, rb)) for rb in _REBUILDS]
+            # End the preflight's read-only transaction so the rebuild
+            # starts a fresh one carrying no snapshot.
+            conn.rollback()
+            try:
+                tables = _rebuild(conn, plans)
+            except BaseException:
+                conn.rollback()
+                raise
+            if dry_run:
+                conn.rollback()
+            else:
+                conn.commit()
+        finally:
+            try:
+                conn.execute(text("SELECT RELEASE_LOCK('cs_tool_refresh')"))
+            except Exception as e:  # never mask the real outcome
+                log.warning("refresh_all: RELEASE_LOCK failed: %s", e)
+
+    report = RefreshReport(tables=tables, committed=not dry_run)
+    log.info("refresh_all: %s", report.summary())
+    return report
 
 
 # Per-table write grants on `myuser`.* (reference grant script, section 07).
@@ -701,6 +923,22 @@ def revokes_for_customer(conn: Connection, customer_code: int) -> int:
 # We UPDATE in place (not DELETE) precisely so re-enable is a cheap flip. A
 # user not yet present in a given table just updates 0 rows there (already
 # invisible to that app) — harmless.
+#
+# propagate_disable and purge_user_details run inside the request's
+# transaction, so two errors must never be swallowed: a deadlock (1213)
+# rolls back the WHOLE transaction server-side — including the request's
+# customer_users change — and a lock wait timeout (1205) abandons the
+# statement. Carrying on would commit a partial edit, or a fresh implicit
+# transaction missing the request's earlier writes, and report success.
+# Both are likeliest while a refresh (Run grants) is running.
+_TXN_ABORT_ERRNOS = frozenset({1205, 1213})
+
+
+def _aborts_transaction(e: BaseException) -> bool:
+    args = getattr(getattr(e, "orig", None), "args", None)
+    return bool(args) and args[0] in _TXN_ABORT_ERRNOS
+
+
 def propagate_disable(conn: Connection, *, user_id: str, disable: int) -> int:
     """Set `disable` = <disable> for one user across every user_details*
     table. Returns total rows updated. Per-table failures are logged but
@@ -714,6 +952,8 @@ def propagate_disable(conn: Connection, *, user_id: str, disable: int) -> int:
             )
             total += r.rowcount or 0
         except Exception as e:
+            if _aborts_transaction(e):
+                raise
             log.warning("propagate_disable failed on %s: %s", tbl, e)
     log.info("propagate_disable(%s -> %s): %d rows", user_id, disable, total)
     return total
@@ -746,6 +986,8 @@ def purge_user_details(conn: Connection, *, user_id: str) -> int:
             )
             total += r.rowcount or 0
         except Exception as e:
+            if _aborts_transaction(e):
+                raise
             log.warning("purge_user_details failed on %s: %s", tbl, e)
     log.info("purge_user_details(%s): %d rows", user_id, total)
     return total

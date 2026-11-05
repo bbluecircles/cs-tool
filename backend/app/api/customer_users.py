@@ -22,7 +22,7 @@ import logging
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.api.deps import get_current_agent
 from app.api.errors import ER_DUP_ENTRY, conflict, invalid, mysql_errno
@@ -48,6 +48,18 @@ router = APIRouter(prefix="/api/customer-users", tags=["customer_users"])
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
+
+
+def _raise_if_busy(e: OperationalError) -> None:
+    """Deadlock (1213) / lock wait timeout (1205), typically against a
+    running Run grants. The request's transaction is rolled back on the way
+    out, so say exactly that instead of a bare 500."""
+    if mysql_errno(e) in (1205, 1213):
+        raise conflict(
+            "The database was busy (another update, such as Run grants, was "
+            "running), so nothing was saved. Please try again.",
+            code="busy",
+        )
 
 
 @router.get("", response_model=ListResponse)
@@ -223,9 +235,13 @@ def update_customer_user(
         # user_details* tables so the app blocks (disable=1) or restores
         # (disable=0) the user immediately, without waiting for a full refresh.
         if "disable" in payload.changes:
-            sync_sql.propagate_disable(
-                conn, user_id=user_id, disable=int(payload.changes["disable"])
-            )
+            try:
+                sync_sql.propagate_disable(
+                    conn, user_id=user_id, disable=int(payload.changes["disable"])
+                )
+            except OperationalError as e:
+                _raise_if_busy(e)
+                raise
         after = customer_users_repo.get_customer_user(
             conn, user_id, customer_code
         )
@@ -310,7 +326,11 @@ def change_user_customer(
         # they carry the OLD customer's databases, and a row labeled with
         # the new customer but granting the old one's data would be worse
         # than no row at all. Run grants for the new customer rebuilds them.
-        removed = sync_sql.purge_user_details(conn, user_id=user_id)
+        try:
+            removed = sync_sql.purge_user_details(conn, user_id=user_id)
+        except OperationalError as e:
+            _raise_if_busy(e)
+            raise
 
         after = customer_users_repo.get_customer_user(conn, user_id, new_code)
         audit.record(

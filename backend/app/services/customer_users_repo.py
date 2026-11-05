@@ -57,6 +57,7 @@ EDITABLE_COLUMNS: tuple[str, ...] = (
     "web_esri_access", "web_esri_tap_access",
     "web_inpatient_access", "web_outpatient_access",
     "web_ed_access", "web_claims_access",
+    "provider_directory_access",
 )
 
 # Every projected column is sortable. customer_name comes from the JOIN to
@@ -70,6 +71,7 @@ SORTABLE_COLUMNS: frozenset[str] = frozenset({
     "web_esri_access", "web_esri_tap_access",
     "web_inpatient_access", "web_outpatient_access",
     "web_ed_access", "web_claims_access",
+    "provider_directory_access",
     "create_date", "modify_date",
 })
 
@@ -91,6 +93,7 @@ _LIST_COLUMNS = """
     cu.web_esri_access, cu.web_esri_tap_access,
     cu.web_inpatient_access, cu.web_outpatient_access,
     cu.web_ed_access, cu.web_claims_access,
+    cu.provider_directory_access,
     cu.create_date, cu.modify_date
 """.strip()
 
@@ -132,6 +135,7 @@ _COLUMN_MAP: dict[str, str] = {
     "web_outpatient_access": "cu.web_outpatient_access",
     "web_ed_access":         "cu.web_ed_access",
     "web_claims_access":     "cu.web_claims_access",
+    "provider_directory_access": "cu.provider_directory_access",
     "create_date":           "cu.create_date",
     "modify_date":           "cu.modify_date",
 }
@@ -253,6 +257,7 @@ def create_customer_user(conn: Connection, data: dict[str, Any]) -> None:
                  web_esri_access, web_esri_tap_access,
                  web_inpatient_access, web_outpatient_access,
                  web_ed_access, web_claims_access,
+                 provider_directory_access,
                  create_date, modify_date)
             VALUES
                 (:user_id, :customer_code, :e_mail, :disable,
@@ -264,6 +269,7 @@ def create_customer_user(conn: Connection, data: dict[str, Any]) -> None:
                  :web_esri_access, :web_esri_tap_access,
                  :web_inpatient_access, :web_outpatient_access,
                  :web_ed_access, :web_claims_access,
+                 :provider_directory_access,
                  NOW(), NOW())
             """
         ),
@@ -297,6 +303,7 @@ def create_customer_user(conn: Connection, data: dict[str, Any]) -> None:
             "web_outpatient_access": data.get("web_outpatient_access", 0),
             "web_ed_access": data.get("web_ed_access", 0),
             "web_claims_access": data.get("web_claims_access", 0),
+            "provider_directory_access": data.get("provider_directory_access", 0),
         },
     )
 

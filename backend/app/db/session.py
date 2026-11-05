@@ -61,9 +61,11 @@ def get_raw_connection() -> Iterator[Connection]:
     """Yield a connection in AUTOCOMMIT mode.
 
     Used for fire-and-forget admin operations that mix MariaDB DDL (CREATE
-    USER, GRANT, DROP USER, TRUNCATE — all implicitly committed by MariaDB)
-    with DML (the refresh INSERTs and the revoke cleanup DELETEs). AUTOCOMMIT
-    makes every statement persist immediately.
+    USER, GRANT, DROP USER — all implicitly committed by MariaDB) with DML
+    (the revoke cleanup DELETEs). AUTOCOMMIT makes every statement persist
+    immediately — so never use it for work that must be all-or-nothing. The
+    user_details* refresh used to run here; sync_sql.refresh_all now opens
+    its own transactional connection for exactly that reason.
 
     This previously used engine.connect() with no transaction, which rolled
     back any uncommitted DML on exit. The DDL survived (MariaDB commits it
