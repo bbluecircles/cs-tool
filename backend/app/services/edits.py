@@ -198,7 +198,8 @@ def apply_changes(
     result = ApplyResult(applied=applied)
 
     try:
-        refresh_all()
+        with get_raw_connection() as conn:
+            refresh_all(conn)
     except Exception as e:
         result.refresh_ok = False
         result.refresh_error = str(e)

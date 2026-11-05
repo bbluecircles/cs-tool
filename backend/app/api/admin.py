@@ -28,7 +28,6 @@ from app.schemas.auth import CurrentAgent
 from app.services import audit
 from app.services.sync_sql import (
     RefreshDisabled,
-    describe_db_error,
     grants_for_customer,
     refresh_all,
     revokes_for_customer,
@@ -68,25 +67,22 @@ def retry_refresh(
             error="View refresh is disabled via ENABLE_VIEW_REFRESH=false.",
         )
     try:
-        report = refresh_all()
+        with get_raw_connection() as conn:
+            refresh_all(conn)
     except RefreshDisabled as e:
         return RetryResponse(ok=False, disabled=True, error=str(e))
     except Exception as e:
         log.exception("retry-refresh failed")
-        msg = describe_db_error(e)
         with get_connection() as conn:
             audit.record(
                 conn,
                 user_id=agent.user_id,
                 action="admin.retry_refresh.failed",
                 entity_type="sync",
-                notes=msg,
+                notes=str(e),
                 ip=_client_ip(request),
             )
-        return RetryResponse(
-            ok=False,
-            error=f"Refresh failed; no user_details table was changed. {msg}",
-        )
+        return RetryResponse(ok=False, error=str(e))
 
     with get_connection() as conn:
         audit.record(
@@ -94,7 +90,6 @@ def retry_refresh(
             user_id=agent.user_id,
             action="admin.retry_refresh",
             entity_type="sync",
-            notes=report.summary(),
             ip=_client_ip(request),
         )
     return RetryResponse(ok=True)
@@ -132,15 +127,14 @@ def retry_grants(
     refresh_error: str | None = None
 
     # Phase 1: refresh, always. force=True bypasses ENABLE_VIEW_REFRESH.
-    # refresh_all is all-or-nothing: if it raises, every user_details table
-    # still holds exactly what it held before.
     try:
-        report = refresh_all(force=True)
+        with get_raw_connection() as conn:
+            refresh_all(conn, force=True)
         refresh_status = "succeeded"
     except Exception as e:
         log.exception("retry-grants: refresh phase failed")
         refresh_status = "failed"
-        refresh_error = describe_db_error(e)
+        refresh_error = str(e)
         with get_connection() as conn:
             audit.record(
                 conn,
@@ -148,15 +142,12 @@ def retry_grants(
                 action="admin.retry_grants.failed",
                 entity_type="sync",
                 entity_key=str(customer_code),
-                notes=f"refresh phase failed: {refresh_error}",
+                notes=f"refresh phase failed: {e}",
                 ip=_client_ip(request),
             )
         return RetryResponse(
             ok=False,
-            error=(
-                "Refresh failed; no user_details table was changed and "
-                f"grants did not run. {refresh_error}"
-            ),
+            error=f"Refresh failed before grants ran: {e}",
             refresh_status=refresh_status,
             refresh_error=refresh_error,
         )
@@ -191,7 +182,6 @@ def retry_grants(
             action="admin.retry_grants",
             entity_type="sync",
             entity_key=str(customer_code),
-            after={"refresh": report.summary()},
             notes=f"refresh={refresh_status}; {count} statements applied",
             ip=_client_ip(request),
         )

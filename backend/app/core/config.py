@@ -39,12 +39,6 @@ class Settings(BaseSettings):
     # external process handles this on the current deployment.
     enable_view_refresh: bool = Field(default=True)
 
-    # Safety limit for the user_details* refresh: a rebuild that would leave
-    # any lookup table with more than this percentage fewer rows than it has
-    # now is rolled back instead of committed. 100 turns the check off.
-    # Emptying a populated table is refused regardless of this value.
-    refresh_max_shrink_pct: int = Field(default=50, ge=0, le=100)
-
     # --- CORS / cookies -----------------------------------------------------
     cors_origins: str = Field(default="http://localhost:5173")
     cookie_secure: bool = Field(default=False)

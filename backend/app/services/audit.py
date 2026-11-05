@@ -58,11 +58,6 @@ def record(
     ip: str | None = None,
 ) -> None:
     """Insert one audit row. Best-effort: never raises."""
-    # notes is VARCHAR(500). Under strict sql_mode a longer value fails the
-    # whole INSERT — which the except below swallows — so a long error
-    # message used to lose the audit row entirely. Truncate instead.
-    if notes is not None and len(notes) > 500:
-        notes = notes[:497] + "..."
     try:
         conn.execute(
             text(
